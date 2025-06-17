@@ -10,6 +10,7 @@ const EditFindingForm = ({ finding, onFindingEdited, onCancel }) => {
     category: finding.category,
     status: finding.status
   });
+  const [beforePhoto, setBeforePhoto] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -27,12 +28,42 @@ const EditFindingForm = ({ finding, onFindingEdited, onCancel }) => {
     });
   };
 
+  const uploadPhoto = async (file) => {
+    if (!file) return null;
+    
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${finding.ship_id}/before_${Date.now()}.${fileExt}`;
+    const filePath = `findings/${fileName}`;
+
+    try {
+      const { error } = await supabase.storage
+        .from('finding-images')
+        .upload(filePath, file);
+
+      if (error) throw error;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('finding-images')
+        .getPublicUrl(filePath);
+
+      return publicUrl;
+    } catch (error) {
+      console.error('Error uploading photo:', error);
+      throw error;
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
+      let beforePhotoUrl = finding.before_photo;
+      if (beforePhoto) {
+        beforePhotoUrl = await uploadPhoto(beforePhoto);
+      }
+
       const { error } = await supabase
         .from('findings')
         .update({
@@ -40,7 +71,8 @@ const EditFindingForm = ({ finding, onFindingEdited, onCancel }) => {
           category: formData.category,
           status: formData.status,
           pic_ship: formData.picShip,
-          pic_office: formData.picOffice
+          pic_office: formData.picOffice,
+          before_photo: beforePhotoUrl
         })
         .eq('id', finding.id);
 
@@ -112,6 +144,37 @@ const EditFindingForm = ({ finding, onFindingEdited, onCancel }) => {
                   </div>
                 </div>
               </div>
+
+              <div className="mb-3">
+                <label className="form-label">Foto Before</label>
+                <input
+                  type="file"
+                  className="form-control"
+                  accept="image/*"
+                  onChange={(e) => setBeforePhoto(e.target.files[0])}
+                  disabled={loading}
+                />
+                <div className="form-text">Format: JPG, PNG, GIF. Max: 5MB</div>
+              </div>
+
+              {(beforePhoto || finding.before_photo) && (
+                <div className="mb-3">
+                  <label className="form-label">Preview Foto Before:</label>
+                  <div className="border rounded p-2">
+                    <img 
+                      src={beforePhoto ? URL.createObjectURL(beforePhoto) : finding.before_photo} 
+                      alt="Preview" 
+                      className="img-fluid rounded"
+                      style={{ maxHeight: '200px', width: '100%', objectFit: 'cover' }}
+                    />
+                    {beforePhoto && (
+                      <small className="text-muted d-block mt-1">
+                        File: {beforePhoto.name} ({(beforePhoto.size / 1024 / 1024).toFixed(2)} MB)
+                      </small>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="mb-3">
                 <label className="form-label">Deskripsi Temuan *</label>

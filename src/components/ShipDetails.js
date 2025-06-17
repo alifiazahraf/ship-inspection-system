@@ -119,6 +119,54 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     await fetchShipData();
   };
 
+  const handleDeleteFinding = async (finding) => {
+    // Create custom confirm dialog
+    toast.warn(
+      <div className="text-center">
+        <p className="mb-3">Apakah Anda yakin ingin menghapus temuan ini?</p>
+        <div className="d-flex justify-content-center gap-1">
+          <button 
+            className="btn btn-sm btn-secondary" 
+            onClick={() => toast.dismiss()}
+          >
+            Batal
+          </button>
+          <button
+            className="btn btn-sm btn-danger"
+            onClick={async () => {
+              toast.dismiss();
+              try {
+                const { error } = await supabase
+                  .from('findings')
+                  .delete()
+                  .eq('id', finding.id);
+
+                if (error) {
+                  toast.error('Gagal menghapus temuan: ' + error.message);
+                } else {
+                  toast.success('Temuan berhasil dihapus!');
+                  await fetchShipData();
+                }
+              } catch (error) {
+                toast.error('Terjadi kesalahan saat menghapus temuan');
+              }
+            }}
+          >
+            Ya, Hapus
+          </button>
+        </div>
+      </div>,
+      {
+        position: "top-center",
+        autoClose: false,
+        closeOnClick: false,
+        draggable: false,
+        closeButton: false,
+        className: 'bg-white'
+      }
+    );
+  };
+
   return (
     <>
       <div className="d-flex justify-content-between align-items-center mb-4">
@@ -196,6 +244,9 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                     <th scope="col" className="text-center">No</th>
                     <th scope="col">Date</th>
                     <th scope="col">Finding</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">PIC Kapal</th>
+                    <th scope="col">PIC Kantor</th>
                     <th scope="col">Status</th>
                     <th scope="col">Foto Before</th>
                     <th scope="col">Foto After</th>
@@ -208,10 +259,10 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                       <tr key={finding.id}>
                         <td className="text-center"><span className="badge bg-primary rounded-pill">{finding.no}</span></td>
                         <td>{new Date(finding.date).toLocaleDateString()}</td>
-                        <td>
-                          <div className="fw-medium">{finding.finding}</div>
-                          <small className="text-muted">{finding.category} | PIC: {finding.pic_ship} / {finding.pic_office}</small>
-                        </td>
+                        <td className="fw-medium">{finding.finding}</td>
+                        <td>{finding.category}</td>
+                        <td>{finding.pic_ship}</td>
+                        <td>{finding.pic_office}</td>
                         <td>
                           <span className={`badge ${ finding.status === 'Open' ? 'bg-danger' : 'bg-success' }`}>
                             {finding.status}
@@ -257,20 +308,29 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                         </td>
                         {role === 'admin' && (
                           <td className="text-center">
-                            <button 
-                              className="btn btn-sm btn-outline-primary"
-                              onClick={() => handleEditFinding(finding)}
-                            >
-                              <i className="bi bi-pencil me-1"></i>
-                              Edit
-                            </button>
+                            <div className="btn-group">
+                              <button 
+                                className="btn btn-sm btn-outline-primary mr-2"
+                                onClick={() => handleEditFinding(finding)}
+                              >
+                                <i className="bi bi-pencil me-1"></i>
+                                Edit
+                              </button>
+                              <button 
+                                className="btn btn-sm btn-outline-danger"
+                                onClick={() => handleDeleteFinding(finding)}
+                              >
+                                <i className="bi bi-trash me-1"></i>
+                                Hapus
+                              </button>
+                            </div>
                           </td>
                         )}
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="6" className="text-center py-5">
+                      <td colSpan="10" className="text-center py-5">
                         <div className="text-muted">
                           <i className="bi bi-inbox fs-1 d-block mb-3"></i>
                           Belum ada temuan inspeksi
