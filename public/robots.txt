@@ -1,3 +1,8 @@
 # https://www.robotstxt.org/robotstxt.html
 User-agent: *
-Disallow:
+Allow: /
+
+# Explicitly allow favicon
+Allow: /favicon.ico
+Allow: /favicon/
+Allow: /manifest.json
