@@ -19,16 +19,40 @@ const AdminDashboard = ({ user, handleLogout }) => {
   const fetchShips = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data: shipsData, error: shipsError } = await supabase
         .from('ships')
         .select('*');
 
-      if (error) {
-        console.error('Error fetching ships:', error);
+      if (shipsError) {
+        console.error('Error fetching ships:', shipsError);
         toast.error('Gagal memuat data kapal');
-      } else {
-        setShips(data);
+        return;
       }
+
+      // Fetch all findings
+      const { data: findingsData, error: findingsError } = await supabase
+        .from('findings')
+        .select('*');
+
+      if (findingsError) {
+        console.error('Error fetching findings:', findingsError);
+        toast.error('Gagal memuat data temuan');
+        return;
+      }
+
+      // Process ships to include latest inspection date
+      const processedShips = shipsData.map(ship => {
+        const shipFindings = findingsData.filter(f => f.ship_id === ship.id);
+        if (shipFindings.length > 0) {
+          const latestDate = shipFindings.reduce((latest, finding) => {
+            return finding.date > latest ? finding.date : latest;
+          }, shipFindings[0].date);
+          return { ...ship, last_inspection: latestDate };
+        }
+        return ship;
+      });
+
+      setShips(processedShips);
     } catch (error) {
       console.error('Unexpected error fetching ships:', error);
       toast.error('Terjadi kesalahan saat memuat data kapal');

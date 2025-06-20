@@ -8,7 +8,8 @@ const EditFindingForm = ({ finding, onFindingEdited, onCancel }) => {
     picShip: finding.pic_ship,
     picOffice: finding.pic_office,
     category: finding.category,
-    status: finding.status
+    status: finding.status,
+    date: finding.date.split('T')[0]
   });
   const [beforePhoto, setBeforePhoto] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -70,6 +71,7 @@ const EditFindingForm = ({ finding, onFindingEdited, onCancel }) => {
           finding: formData.finding,
           category: formData.category,
           status: formData.status,
+          date: formData.date,
           pic_ship: formData.picShip,
           pic_office: formData.picOffice,
           before_photo: beforePhotoUrl
@@ -109,7 +111,22 @@ const EditFindingForm = ({ finding, onFindingEdited, onCancel }) => {
 
             <form onSubmit={handleSubmit}>
               <div className="row">
-                <div className="col-md-6">
+                <div className="col-md-4">
+                  <div className="mb-3">
+                    <label className="form-label">Tanggal Temuan *</label>
+                    <input
+                      type="date"
+                      className="form-control"
+                      name="date"
+                      value={formData.date}
+                      onChange={handleInputChange}
+                      max={new Date().toISOString().split('T')[0]}
+                      required
+                      disabled={loading}
+                    />
+                  </div>
+                </div>
+                <div className="col-md-4">
                   <div className="mb-3">
                     <label className="form-label">Kategori Temuan *</label>
                     <select
@@ -126,7 +143,7 @@ const EditFindingForm = ({ finding, onFindingEdited, onCancel }) => {
                     </select>
                   </div>
                 </div>
-                <div className="col-md-6">
+                <div className="col-md-4">
                   <div className="mb-3">
                     <label className="form-label">Status *</label>
                     <select

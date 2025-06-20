@@ -16,6 +16,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   const [showEditForm, setShowEditForm] = useState(false);
   const [afterPhoto, setAfterPhoto] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [latestInspectionDate, setLatestInspectionDate] = useState(selectedShip.last_inspection);
 
   const fetchShipData = async () => {
     setLoading(true);
@@ -41,6 +42,12 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         toast.error('Gagal memuat data temuan');
       } else {
         setFindings(findingsResult.data);
+        if (findingsResult.data && findingsResult.data.length > 0) {
+          const latestDate = findingsResult.data.reduce((latest, finding) => {
+            return finding.date > latest ? finding.date : latest;
+          }, findingsResult.data[0].date);
+          setLatestInspectionDate(latestDate);
+        }
       }
 
       if (!assignmentResult.error && assignmentResult.data) {
@@ -201,7 +208,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
             </div>
             <div className="col-md-2">
               <h6 className="text-muted">Inspeksi Terakhir</h6>
-              <p className="fw-bold fs-5 mb-0">{new Date(selectedShip.last_inspection).toLocaleDateString()}</p>
+              <p className="fw-bold fs-5 mb-0">{new Date(latestInspectionDate).toLocaleDateString()}</p>
             </div>
             <div className="col-md-2">
               <h6 className="text-muted">Total Temuan</h6>
