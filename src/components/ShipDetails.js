@@ -4,6 +4,8 @@ import AddFindingForm from './AddFindingForm';
 import EditFindingForm from './EditFindingForm';
 import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role = 'admin' }) => {
   const [findings, setFindings] = useState([]);
@@ -174,6 +176,200 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     );
   };
 
+  // Helper function to convert image URL to base64
+  const getBase64FromImageUrl = (url) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        const dataURL = canvas.toDataURL('image/jpeg', 0.8);
+        resolve(dataURL);
+      };
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  };
+
+  const handleDownloadPDF = async () => {
+    // Create new PDF document in landscape orientation
+    const doc = new jsPDF('landscape', 'pt', 'a4');
+    
+    // Set document title and metadata
+    doc.setProperties({
+      title: `Laporan Temuan - ${selectedShip.ship_name}`,
+      subject: 'Laporan Temuan Inspeksi Kapal',
+      author: 'Ship Inspection System',
+      creator: 'Ship Inspection System'
+    });
+
+    // Add header with ship information
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text('LAPORAN TEMUAN INSPEKSI KAPAL', doc.internal.pageSize.getWidth() / 2, 50, { align: 'center' });
+    
+    // Ship details section
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'normal');
+    const shipInfoY = 90;
+    doc.text(`Nama Kapal: ${selectedShip.ship_name}`, 50, shipInfoY);
+    doc.text(`Inspeksi Terakhir: ${new Date(latestInspectionDate).toLocaleDateString('id-ID')}`, 300, shipInfoY);
+    doc.text(`Kode Kapal: ${selectedShip.ship_code}`, 550, shipInfoY);
+    
+    doc.text(`Total Temuan: ${findings.length}`, 50, shipInfoY + 20);
+    doc.text(`Tanggal Cetak: ${new Date().toLocaleDateString('id-ID')}`, 300, shipInfoY + 20);
+    doc.text(`User: ${assignedUser ? assignedUser.email : 'Belum di-assign'}`, 550, shipInfoY + 20);
+
+    // Add a line separator
+    doc.setLineWidth(1);
+    doc.line(50, shipInfoY + 40, doc.internal.pageSize.getWidth() - 50, shipInfoY + 40);
+
+    // Prepare table data
+    const tableColumns = [
+      { header: 'No', dataKey: 'no' },
+      { header: 'Tanggal', dataKey: 'date' },
+      { header: 'Temuan', dataKey: 'finding' },
+      { header: 'Kategori', dataKey: 'category' },
+      { header: 'PIC Kapal', dataKey: 'pic_ship' },
+      { header: 'PIC Kantor', dataKey: 'pic_office' },
+      { header: 'Status', dataKey: 'status' },
+      { header: 'Foto Before', dataKey: 'before_photo' },
+      { header: 'Foto After', dataKey: 'after_photo' }
+    ];
+
+    // Preload all images and convert to base64
+    const imagePromises = [];
+    findings.forEach(finding => {
+      if (finding.before_photo) {
+        imagePromises.push(getBase64FromImageUrl(finding.before_photo));
+      } else {
+        imagePromises.push(Promise.resolve(null));
+      }
+      if (finding.after_photo) {
+        imagePromises.push(getBase64FromImageUrl(finding.after_photo));
+      } else {
+        imagePromises.push(Promise.resolve(null));
+      }
+    });
+
+    const images = await Promise.all(imagePromises);
+    
+    const tableRows = findings.map((finding, index) => ({
+      no: finding.no,
+      date: new Date(finding.date).toLocaleDateString('id-ID'),
+      finding: finding.finding,
+      category: finding.category,
+      pic_ship: finding.pic_ship,
+      pic_office: finding.pic_office,
+      status: finding.status,
+      before_photo: finding.before_photo,
+      after_photo: finding.after_photo,
+      before_image_data: images[index * 2],
+      after_image_data: images[index * 2 + 1]
+    }));
+
+    // Configure table styles
+    const tableOptions = {
+      startY: shipInfoY + 60,
+      head: [tableColumns.map(col => col.header)],
+      body: tableRows.map(row => tableColumns.map(col => {
+        if (col.dataKey === 'before_photo' || col.dataKey === 'after_photo') {
+          return row[col.dataKey] ? '' : 'Tidak Ada'; // Empty string for images, will be handled by didDrawCell
+        }
+        return row[col.dataKey];
+      })),
+      theme: 'striped',
+      headStyles: {
+        fillColor: [52, 144, 220],
+        textColor: [255, 255, 255],
+        fontSize: 10,
+        fontStyle: 'bold',
+        halign: 'center'
+      },
+      bodyStyles: {
+        fontSize: 9,
+        cellPadding: 5,
+        minCellHeight: 50
+      },
+      columnStyles: {
+        0: { cellWidth: 40, halign: 'center' }, // No
+        1: { cellWidth: 70, halign: 'center' }, // Date
+        2: { cellWidth: 150, halign: 'left' },  // Finding
+        3: { cellWidth: 80, halign: 'center' }, // Category
+        4: { cellWidth: 80, halign: 'center' }, // PIC Ship
+        5: { cellWidth: 80, halign: 'center' }, // PIC Office
+        6: { cellWidth: 60, halign: 'center' }, // Status
+        7: { cellWidth: 70, halign: 'center' }, // Before Photo
+        8: { cellWidth: 70, halign: 'center' }  // After Photo
+      },
+      styles: {
+        overflow: 'linebreak',
+        cellWidth: 'wrap'
+      },
+      margin: { left: 50, right: 50 },
+      didDrawCell: function (data) {
+        if (data.column.index === 7 && data.cell.section === 'body') { // Before Photo column
+          const rowIndex = data.row.index;
+          const imageData = tableRows[rowIndex].before_image_data;
+          if (imageData) {
+            try {
+              doc.addImage(imageData, 'JPEG', data.cell.x + 5, data.cell.y + 5, 60, 40);
+            } catch (e) {
+              // If image fails to load, show text instead
+              doc.text('Ada', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height / 2, { align: 'center' });
+            }
+          }
+        }
+        if (data.column.index === 8 && data.cell.section === 'body') { // After Photo column
+          const rowIndex = data.row.index;
+          const imageData = tableRows[rowIndex].after_image_data;
+          if (imageData) {
+            try {
+              doc.addImage(imageData, 'JPEG', data.cell.x + 5, data.cell.y + 5, 60, 40);
+            } catch (e) {
+              // If image fails to load, show text instead
+              doc.text('Ada', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height / 2, { align: 'center' });
+            }
+          }
+        }
+      }
+    };
+
+    // Add table to PDF
+    autoTable(doc, tableOptions);
+
+    // Add footer with page numbers
+    const pageCount = doc.internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.text(
+        `Halaman ${i} dari ${pageCount}`,
+        doc.internal.pageSize.getWidth() / 2,
+        doc.internal.pageSize.getHeight() - 30,
+        { align: 'center' }
+      );
+      doc.text(
+        `Dicetak pada: ${new Date().toLocaleString('id-ID')}`,
+        doc.internal.pageSize.getWidth() - 50,
+        doc.internal.pageSize.getHeight() - 30,
+        { align: 'right' }
+      );
+    }
+
+    // Generate filename with ship name and current date
+    const fileName = `Laporan_Temuan_${selectedShip.ship_name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+    
+    // Save the PDF
+    doc.save(fileName);
+    toast.success('PDF berhasil didownload!');
+  };
+
   return (
     <>
       <div className="d-flex justify-content-between align-items-center mb-4">
@@ -186,16 +382,27 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
             Kembali
           </button>
         </div>
-        {role === 'admin' && (
+        <div className="d-flex gap-2">
           <button 
-            className="btn btn-primary d-flex align-items-center"
-            onClick={() => setShowAddForm(true)}
-            disabled={loading}
+            className="btn btn-success d-flex align-items-center"
+            onClick={handleDownloadPDF}
+            disabled={loading || findings.length === 0}
+            title={findings.length === 0 ? "Tidak ada temuan untuk didownload" : "Download laporan temuan sebagai PDF"}
           >
-            <i className="bi bi-plus-circle me-2"></i>
-            Tambah Temuan Baru
+            <i className="bi bi-download me-2"></i>
+            Download PDF
           </button>
-        )}
+          {role === 'admin' && (
+            <button 
+              className="btn btn-primary d-flex align-items-center"
+              onClick={() => setShowAddForm(true)}
+              disabled={loading}
+            >
+              <i className="bi bi-plus-circle me-2"></i>
+              Tambah Temuan Baru
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="card mb-4" style={{ border: '1px solid #dee2e6', padding: '24px' }}>
