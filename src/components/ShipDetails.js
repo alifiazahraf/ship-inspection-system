@@ -6,8 +6,10 @@ import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { logFindingActivity, logShipActivity, ACTIVITY_TYPES } from '../utils/logging';
+import { debugUser } from '../utils/debug';
 
-const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role = 'admin' }) => {
+const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role = 'admin', user }) => {
   const [findings, setFindings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [assignedUser, setAssignedUser] = useState(null);
@@ -19,6 +21,9 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   const [afterPhoto, setAfterPhoto] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [latestInspectionDate, setLatestInspectionDate] = useState(selectedShip.last_inspection);
+  const [downloadingPDF, setDownloadingPDF] = useState(false);
+  const [showDeleteAfterModal, setShowDeleteAfterModal] = useState(false);
+  const [findingToDeleteAfter, setFindingToDeleteAfter] = useState(null);
 
   const fetchShipData = async () => {
     setLoading(true);
@@ -80,6 +85,20 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     setShowAddForm(false);
     toast.success('Temuan berhasil ditambahkan!');
     await fetchShipData();
+    
+    // Log finding creation activity
+    if (user) {
+      // Debug user object
+      debugUser(user, 'handleFindingAdded');
+      
+      logFindingActivity(
+        user,
+        ACTIVITY_TYPES.CREATE,
+        `Menambahkan temuan baru pada kapal: ${selectedShip.ship_name}`,
+        null,
+        selectedShip
+      );
+    }
   };
 
   const handleUploadAfterPhoto = async (finding) => {
@@ -116,6 +135,22 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     setUploading(false);
     toast.success('Foto after berhasil diupload!');
     fetchShipData();
+    
+    // Log after photo upload activity
+    if (user) {
+      // Debug user object
+      debugUser(user, 'handleSubmitAfterPhoto');
+      
+      logFindingActivity(
+        user,
+        ACTIVITY_TYPES.UPDATE,
+        `Mengupload foto after untuk temuan No.${selectedFinding.no} pada kapal: ${selectedShip.ship_name}`,
+        selectedFinding,
+        selectedShip,
+        { ...selectedFinding, after_photo: null }, // old_data
+        { ...selectedFinding, after_photo: publicUrl } // new_data
+      );
+    }
   };
 
   const handleEditFinding = (finding) => {
@@ -126,6 +161,17 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   const handleFindingEdited = async () => {
     setShowEditForm(false);
     await fetchShipData();
+    
+    // Log finding edit activity
+    if (user) {
+      logFindingActivity(
+        user,
+        ACTIVITY_TYPES.UPDATE,
+        `Mengedit temuan No.${selectedFinding.no} pada kapal: ${selectedShip.ship_name}`,
+        selectedFinding,
+        selectedShip
+      );
+    }
   };
 
   const handleDeleteFinding = async (finding) => {
@@ -155,6 +201,18 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                 } else {
                   toast.success('Temuan berhasil dihapus!');
                   await fetchShipData();
+                  
+                  // Log finding deletion activity
+                  if (user) {
+                    logFindingActivity(
+                      user,
+                      ACTIVITY_TYPES.DELETE,
+                      `Menghapus temuan No.${finding.no}: ${finding.finding} pada kapal: ${selectedShip.ship_name}`,
+                      finding,
+                      selectedShip,
+                      finding // old_data
+                    );
+                  }
                 }
               } catch (error) {
                 toast.error('Terjadi kesalahan saat menghapus temuan');
@@ -176,7 +234,53 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     );
   };
 
-  // Helper function to convert image URL to base64
+  const handleDeleteAfterPhoto = async (finding) => {
+    console.log('handleDeleteAfterPhoto called:', finding);
+    setFindingToDeleteAfter(finding);
+    setShowDeleteAfterModal(true);
+  };
+
+  const confirmDeleteAfterPhoto = async () => {
+    if (!findingToDeleteAfter) return;
+    
+    try {
+      const { error } = await supabase
+        .from('findings')
+        .update({ after_photo: null })
+        .eq('id', findingToDeleteAfter.id);
+
+      if (error) {
+        toast.error('Gagal menghapus foto after: ' + error.message);
+      } else {
+        toast.success('Foto after berhasil dihapus!');
+        await fetchShipData();
+        
+        // Log after photo deletion activity
+        if (user) {
+          // Debug user object
+          debugUser(user, 'confirmDeleteAfterPhoto');
+          
+          logFindingActivity(
+            user,
+            ACTIVITY_TYPES.UPDATE,
+            `Menghapus foto after untuk temuan No.${findingToDeleteAfter.no} pada kapal: ${selectedShip.ship_name}`,
+            findingToDeleteAfter,
+            selectedShip,
+            { ...findingToDeleteAfter }, // old_data
+            { ...findingToDeleteAfter, after_photo: null } // new_data
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error deleting after photo:', error);
+      toast.error('Terjadi kesalahan saat menghapus foto after');
+    } finally {
+      setShowDeleteAfterModal(false);
+      setFindingToDeleteAfter(null);
+    }
+  };
+
+  // Helper function to convert image URL to base64 with compression
   const getBase64FromImageUrl = (url) => {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -184,10 +288,30 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       img.onload = () => {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx.drawImage(img, 0, 0);
-        const dataURL = canvas.toDataURL('image/jpeg', 0.8);
+        
+        // Resize image to smaller dimensions for PDF
+        const maxWidth = 300;
+        const maxHeight = 200;
+        let { width, height } = img;
+        
+        // Calculate new dimensions while maintaining aspect ratio
+        if (width > maxWidth) {
+          height = (height * maxWidth) / width;
+          width = maxWidth;
+        }
+        if (height > maxHeight) {
+          width = (width * maxHeight) / height;
+          height = maxHeight;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        // Draw and compress image
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Use lower quality for smaller file size (0.3 = 30% quality)
+        const dataURL = canvas.toDataURL('image/jpeg', 0.3);
         resolve(dataURL);
       };
       img.onerror = () => resolve(null);
@@ -196,178 +320,211 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   };
 
   const handleDownloadPDF = async () => {
-    // Create new PDF document in landscape orientation
-    const doc = new jsPDF('landscape', 'pt', 'a4');
+    setDownloadingPDF(true);
     
-    // Set document title and metadata
-    doc.setProperties({
-      title: `Laporan Temuan - ${selectedShip.ship_name}`,
-      subject: 'Laporan Temuan Inspeksi Kapal',
-      author: 'Ship Inspection System',
-      creator: 'Ship Inspection System'
-    });
+    try {
+      // Show optimization message
+      toast.info('Mengoptimasi gambar untuk PDF, mohon tunggu...', {
+        position: "top-center",
+        autoClose: 2000
+      });
 
-    // Add header with ship information
-    doc.setFontSize(20);
-    doc.setFont('helvetica', 'bold');
-    doc.text('LAPORAN TEMUAN INSPEKSI KAPAL', doc.internal.pageSize.getWidth() / 2, 50, { align: 'center' });
-    
-    // Ship details section
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'normal');
-    const shipInfoY = 90;
-    doc.text(`Nama Kapal: ${selectedShip.ship_name}`, 50, shipInfoY);
-    doc.text(`Inspeksi Terakhir: ${new Date(latestInspectionDate).toLocaleDateString('id-ID')}`, 300, shipInfoY);
-    doc.text(`Kode Kapal: ${selectedShip.ship_code}`, 550, shipInfoY);
-    
-    doc.text(`Total Temuan: ${findings.length}`, 50, shipInfoY + 20);
-    doc.text(`Tanggal Cetak: ${new Date().toLocaleDateString('id-ID')}`, 300, shipInfoY + 20);
-    doc.text(`User: ${assignedUser ? assignedUser.email : 'Belum di-assign'}`, 550, shipInfoY + 20);
+      // Create new PDF document in landscape orientation with compression
+      const doc = new jsPDF({
+        orientation: 'landscape',
+        unit: 'pt',
+        format: 'a4',
+        compress: true // Enable PDF compression
+      });
+      
+      // Set document title and metadata
+      doc.setProperties({
+        title: `Laporan Temuan - ${selectedShip.ship_name}`,
+        subject: 'Laporan Temuan Inspeksi Kapal',
+        author: 'Ship Inspection System',
+        creator: 'Ship Inspection System'
+      });
 
-    // Add a line separator
-    doc.setLineWidth(1);
-    doc.line(50, shipInfoY + 40, doc.internal.pageSize.getWidth() - 50, shipInfoY + 40);
-
-    // Prepare table data
-    const tableColumns = [
-      { header: 'No', dataKey: 'no' },
-      { header: 'Tanggal', dataKey: 'date' },
-      { header: 'Temuan', dataKey: 'finding' },
-      { header: 'Kategori', dataKey: 'category' },
-      { header: 'PIC Kapal', dataKey: 'pic_ship' },
-      { header: 'PIC Kantor', dataKey: 'pic_office' },
-      { header: 'Status', dataKey: 'status' },
-      { header: 'Foto Before', dataKey: 'before_photo' },
-      { header: 'Foto After', dataKey: 'after_photo' }
-    ];
-
-    // Preload all images and convert to base64
-    const imagePromises = [];
-    findings.forEach(finding => {
-      if (finding.before_photo) {
-        imagePromises.push(getBase64FromImageUrl(finding.before_photo));
-      } else {
-        imagePromises.push(Promise.resolve(null));
-      }
-      if (finding.after_photo) {
-        imagePromises.push(getBase64FromImageUrl(finding.after_photo));
-      } else {
-        imagePromises.push(Promise.resolve(null));
-      }
-    });
-
-    const images = await Promise.all(imagePromises);
-    
-    const tableRows = findings.map((finding, index) => ({
-      no: finding.no,
-      date: new Date(finding.date).toLocaleDateString('id-ID'),
-      finding: finding.finding,
-      category: finding.category,
-      pic_ship: finding.pic_ship,
-      pic_office: finding.pic_office,
-      status: finding.status,
-      before_photo: finding.before_photo,
-      after_photo: finding.after_photo,
-      before_image_data: images[index * 2],
-      after_image_data: images[index * 2 + 1]
-    }));
-
-    // Configure table styles
-    const tableOptions = {
-      startY: shipInfoY + 60,
-      head: [tableColumns.map(col => col.header)],
-      body: tableRows.map(row => tableColumns.map(col => {
-        if (col.dataKey === 'before_photo' || col.dataKey === 'after_photo') {
-          return row[col.dataKey] ? '' : 'Tidak Ada'; // Empty string for images, will be handled by didDrawCell
-        }
-        return row[col.dataKey];
-      })),
-      theme: 'striped',
-      headStyles: {
-        fillColor: [52, 144, 220],
-        textColor: [255, 255, 255],
-        fontSize: 10,
-        fontStyle: 'bold',
-        halign: 'center'
-      },
-      bodyStyles: {
-        fontSize: 9,
-        cellPadding: 5,
-        minCellHeight: 50
-      },
-      columnStyles: {
-        0: { cellWidth: 40, halign: 'center' }, // No
-        1: { cellWidth: 70, halign: 'center' }, // Date
-        2: { cellWidth: 150, halign: 'left' },  // Finding
-        3: { cellWidth: 80, halign: 'center' }, // Category
-        4: { cellWidth: 80, halign: 'center' }, // PIC Ship
-        5: { cellWidth: 80, halign: 'center' }, // PIC Office
-        6: { cellWidth: 60, halign: 'center' }, // Status
-        7: { cellWidth: 70, halign: 'center' }, // Before Photo
-        8: { cellWidth: 70, halign: 'center' }  // After Photo
-      },
-      styles: {
-        overflow: 'linebreak',
-        cellWidth: 'wrap'
-      },
-      margin: { left: 50, right: 50 },
-      didDrawCell: function (data) {
-        if (data.column.index === 7 && data.cell.section === 'body') { // Before Photo column
-          const rowIndex = data.row.index;
-          const imageData = tableRows[rowIndex].before_image_data;
-          if (imageData) {
-            try {
-              doc.addImage(imageData, 'JPEG', data.cell.x + 5, data.cell.y + 5, 60, 40);
-            } catch (e) {
-              // If image fails to load, show text instead
-              doc.text('Ada', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height / 2, { align: 'center' });
-            }
-          }
-        }
-        if (data.column.index === 8 && data.cell.section === 'body') { // After Photo column
-          const rowIndex = data.row.index;
-          const imageData = tableRows[rowIndex].after_image_data;
-          if (imageData) {
-            try {
-              doc.addImage(imageData, 'JPEG', data.cell.x + 5, data.cell.y + 5, 60, 40);
-            } catch (e) {
-              // If image fails to load, show text instead
-              doc.text('Ada', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height / 2, { align: 'center' });
-            }
-          }
-        }
-      }
-    };
-
-    // Add table to PDF
-    autoTable(doc, tableOptions);
-
-    // Add footer with page numbers
-    const pageCount = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= pageCount; i++) {
-      doc.setPage(i);
-      doc.setFontSize(8);
+      // Add header with ship information
+      doc.setFontSize(20);
+      doc.setFont('helvetica', 'bold');
+      doc.text('LAPORAN TEMUAN INSPEKSI KAPAL', doc.internal.pageSize.getWidth() / 2, 50, { align: 'center' });
+      
+      // Ship details section
+      doc.setFontSize(12);
       doc.setFont('helvetica', 'normal');
-      doc.text(
-        `Halaman ${i} dari ${pageCount}`,
-        doc.internal.pageSize.getWidth() / 2,
-        doc.internal.pageSize.getHeight() - 30,
-        { align: 'center' }
-      );
-      doc.text(
-        `Dicetak pada: ${new Date().toLocaleString('id-ID')}`,
-        doc.internal.pageSize.getWidth() - 50,
-        doc.internal.pageSize.getHeight() - 30,
-        { align: 'right' }
-      );
-    }
+      const shipInfoY = 90;
+      doc.text(`Nama Kapal: ${selectedShip.ship_name}`, 50, shipInfoY);
+      doc.text(`Inspeksi Terakhir: ${new Date(latestInspectionDate).toLocaleDateString('id-ID')}`, 300, shipInfoY);
+      doc.text(`Kode Kapal: ${selectedShip.ship_code}`, 550, shipInfoY);
+      
+      doc.text(`Total Temuan: ${findings.length}`, 50, shipInfoY + 20);
+      doc.text(`Tanggal Cetak: ${new Date().toLocaleDateString('id-ID')}`, 300, shipInfoY + 20);
+      doc.text(`User: ${assignedUser ? assignedUser.email : 'Belum di-assign'}`, 550, shipInfoY + 20);
 
-    // Generate filename with ship name and current date
-    const fileName = `Laporan_Temuan_${selectedShip.ship_name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
-    
-    // Save the PDF
-    doc.save(fileName);
-    toast.success('PDF berhasil didownload!');
+      // Add a line separator
+      doc.setLineWidth(1);
+      doc.line(50, shipInfoY + 40, doc.internal.pageSize.getWidth() - 50, shipInfoY + 40);
+
+      // Prepare table data
+      const tableColumns = [
+        { header: 'No', dataKey: 'no' },
+        { header: 'Tanggal', dataKey: 'date' },
+        { header: 'Temuan', dataKey: 'finding' },
+        { header: 'Kategori', dataKey: 'category' },
+        { header: 'PIC Kapal', dataKey: 'pic_ship' },
+        { header: 'PIC Kantor', dataKey: 'pic_office' },
+        { header: 'Status', dataKey: 'status' },
+        { header: 'Foto Before', dataKey: 'before_photo' },
+        { header: 'Foto After', dataKey: 'after_photo' }
+      ];
+
+      // Preload all images and convert to base64
+      const imagePromises = [];
+      findings.forEach(finding => {
+        if (finding.before_photo) {
+          imagePromises.push(getBase64FromImageUrl(finding.before_photo));
+        } else {
+          imagePromises.push(Promise.resolve(null));
+        }
+        if (finding.after_photo) {
+          imagePromises.push(getBase64FromImageUrl(finding.after_photo));
+        } else {
+          imagePromises.push(Promise.resolve(null));
+        }
+      });
+
+      const images = await Promise.all(imagePromises);
+      
+      const tableRows = findings.map((finding, index) => ({
+        no: finding.no,
+        date: new Date(finding.date).toLocaleDateString('id-ID'),
+        finding: finding.finding,
+        category: finding.category,
+        pic_ship: finding.pic_ship,
+        pic_office: finding.pic_office,
+        status: finding.status,
+        before_photo: finding.before_photo,
+        after_photo: finding.after_photo,
+        before_image_data: images[index * 2],
+        after_image_data: images[index * 2 + 1]
+      }));
+
+      // Configure table styles with adjusted column widths
+      const tableOptions = {
+        startY: shipInfoY + 60,
+        head: [tableColumns.map(col => col.header)],
+        body: tableRows.map(row => tableColumns.map(col => {
+          if (col.dataKey === 'before_photo' || col.dataKey === 'after_photo') {
+            return row[col.dataKey] ? '' : 'Tidak Ada'; // Empty string for images, will be handled by didDrawCell
+          }
+          return row[col.dataKey];
+        })),
+        theme: 'striped',
+        headStyles: {
+          fillColor: [52, 144, 220],
+          textColor: [255, 255, 255],
+          fontSize: 9,
+          fontStyle: 'bold',
+          halign: 'center'
+        },
+        bodyStyles: {
+          fontSize: 8,
+          cellPadding: 3,
+          minCellHeight: 40
+        },
+        columnStyles: {
+          0: { cellWidth: 35, halign: 'center' }, // No
+          1: { cellWidth: 65, halign: 'center' }, // Date
+          2: { cellWidth: 200, halign: 'left' },  // Finding - kurangi sedikit
+          3: { cellWidth: 80, halign: 'center' }, // Category
+          4: { cellWidth: 80, halign: 'center' }, // PIC Ship
+          5: { cellWidth: 80, halign: 'center' }, // PIC Office
+          6: { cellWidth: 55, halign: 'center' }, // Status
+          7: { cellWidth: 80, halign: 'center' }, // Before Photo
+          8: { cellWidth: 80, halign: 'center' }  // After Photo
+        },
+        styles: {
+          overflow: 'linebreak',
+          cellWidth: 'wrap'
+        },
+        margin: { left: 25, right: 25 },
+        showHead: 'everyPage',
+        didDrawCell: function (data) {
+          if (data.column.index === 7 && data.cell.section === 'body') { // Before Photo column
+            const rowIndex = data.row.index;
+            if (tableRows[rowIndex] && tableRows[rowIndex].before_image_data) {
+              const imageData = tableRows[rowIndex].before_image_data;
+              try {
+                doc.addImage(imageData, 'JPEG', data.cell.x + 2, data.cell.y + 2, 50, 35);
+              } catch (e) {
+                // If image fails to load, show text instead
+                doc.setFontSize(8);
+                doc.text('Ada', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height / 2, { align: 'center' });
+              }
+            }
+          }
+          if (data.column.index === 8 && data.cell.section === 'body') { // After Photo column
+            const rowIndex = data.row.index;
+            if (tableRows[rowIndex] && tableRows[rowIndex].after_image_data) {
+              const imageData = tableRows[rowIndex].after_image_data;
+              try {
+                doc.addImage(imageData, 'JPEG', data.cell.x + 2, data.cell.y + 2, 50, 35);
+              } catch (e) {
+                // If image fails to load, show text instead
+                doc.setFontSize(8);
+                doc.text('Ada', data.cell.x + data.cell.width / 2, data.cell.y + data.cell.height / 2, { align: 'center' });
+              }
+            }
+          }
+        }
+      };
+
+      // Add table to PDF
+      autoTable(doc, tableOptions);
+
+      // Add footer with page numbers
+      const pageCount = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(
+          `Halaman ${i} dari ${pageCount}`,
+          doc.internal.pageSize.getWidth() / 2,
+          doc.internal.pageSize.getHeight() - 30,
+          { align: 'center' }
+        );
+        doc.text(
+          `Dicetak pada: ${new Date().toLocaleString('id-ID')}`,
+          doc.internal.pageSize.getWidth() - 50,
+          doc.internal.pageSize.getHeight() - 30,
+          { align: 'right' }
+        );
+      }
+
+      // Generate filename with ship name and current date
+      const fileName = `Laporan_Temuan_${selectedShip.ship_name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+      
+      // Save the PDF
+      doc.save(fileName);
+      toast.success('PDF berhasil didownload!');
+      
+      // Log PDF download activity
+      if (user) {
+        logShipActivity(
+          user,
+          ACTIVITY_TYPES.VIEW,
+          `Download laporan PDF kapal: ${selectedShip.ship_name} (${findings.length} temuan)`,
+          selectedShip
+        );
+      }
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      toast.error('Terjadi kesalahan saat membuat PDF');
+    } finally {
+      setDownloadingPDF(false);
+    }
   };
 
   return (
@@ -386,11 +543,27 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           <button 
             className="btn btn-success d-flex align-items-center"
             onClick={handleDownloadPDF}
-            disabled={loading || findings.length === 0}
-            title={findings.length === 0 ? "Tidak ada temuan untuk didownload" : "Download laporan temuan sebagai PDF"}
+            disabled={loading || loadingUser || findings.length === 0 || downloadingPDF}
+            title={
+              loading || loadingUser ? "Sedang memuat data..." :
+              findings.length === 0 ? "Tidak ada temuan untuk didownload" : 
+              downloadingPDF ? "Sedang membuat PDF..." :
+              "Download laporan temuan sebagai PDF"
+            }
           >
-            <i className="bi bi-download me-2"></i>
-            Download PDF
+            {downloadingPDF ? (
+              <>
+                <div className="spinner-border spinner-border-sm me-2" role="status">
+                  <span className="visually-hidden">Loading...</span>
+                </div>
+                Membuat PDF...
+              </>
+            ) : (
+              <>
+                <i className="bi bi-download me-2"></i>
+                Download PDF
+              </>
+            )}
           </button>
           {role === 'admin' && (
             <button 
@@ -500,7 +673,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                         </td>
                         <td>
                           {finding.after_photo ? (
-                            <div style={{ cursor: 'pointer' }} onClick={() => setSelectedImage(finding.after_photo)}>
+                            <div style={{ position: 'relative', cursor: 'pointer' }}>
                               <img 
                                 src={finding.after_photo} 
                                 alt="After" 
@@ -510,14 +683,37 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                                   objectFit: 'cover',
                                   borderRadius: '4px'
                                 }} 
+                                onClick={() => setSelectedImage(finding.after_photo)}
                               />
+                              <div className="position-absolute top-0 end-0 m-1 d-flex flex-column gap-1">
+                                <button 
+                                  className="btn btn-sm btn-warning"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleUploadAfterPhoto(finding);
+                                  }}
+                                  title="Edit foto after"
+                                  style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+                                >
+                                  <i className="bi bi-pencil"></i>
+                                </button>
+                                <button 
+                                  className="btn btn-sm btn-danger"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteAfterPhoto(finding);
+                                  }}
+                                  title="Hapus foto after"
+                                  style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+                                >
+                                  <i className="bi bi-trash"></i>
+                                </button>
+                              </div>
                             </div>
                           ) : (
-                            role === 'user' ? (
-                              <button className="btn btn-sm btn-primary" onClick={() => handleUploadAfterPhoto(finding)}>
-                                <i className="bi bi-camera me-1"></i>Add
-                              </button>
-                            ) : <span className="text-muted">-</span>
+                            <button className="btn btn-sm btn-primary" onClick={() => handleUploadAfterPhoto(finding)}>
+                              <i className="bi bi-camera me-1"></i>Add
+                            </button>
                           )}
                         </td>
                         {role === 'admin' && (
@@ -594,6 +790,42 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           onFindingEdited={handleFindingEdited}
           onCancel={() => setShowEditForm(false)}
         />
+      )}
+
+      {/* Delete After Photo Modal */}
+      {showDeleteAfterModal && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Konfirmasi Hapus Foto After</h5>
+                <button 
+                  type="button" 
+                  className="btn-close" 
+                  onClick={() => setShowDeleteAfterModal(false)}
+                ></button>
+              </div>
+              <div className="modal-body">
+                <p>Apakah Anda yakin ingin menghapus foto after ini?</p>
+                <p className="text-muted small">Aksi ini tidak dapat dibatalkan.</p>
+              </div>
+              <div className="modal-footer">
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => setShowDeleteAfterModal(false)}
+                >
+                  Batal
+                </button>
+                <button 
+                  className="btn btn-danger" 
+                  onClick={confirmDeleteAfterPhoto}
+                >
+                  Ya, Hapus
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

@@ -3,9 +3,11 @@ import { supabase } from '../supabaseClient';
 import ShipDetails from './ShipDetails';
 import AddShipForm from './AddShipForm';
 import AssignUserToShip from './AssignUserToShip';
+import ActivityLogs from './ActivityLogs';
 import { ToastContainer, toast } from 'react-toastify';
 import logo from '../assets/images/gls-logo.png';
 import 'react-toastify/dist/ReactToastify.css';
+import { logShipActivity, ACTIVITY_TYPES } from '../utils/logging';
 
 const AdminDashboard = ({ user, handleLogout }) => {
   const [ships, setShips] = useState([]);
@@ -15,6 +17,8 @@ const AdminDashboard = ({ user, handleLogout }) => {
   const [showAddFindingForm, setShowAddFindingForm] = useState(false);
   const [findings, setFindings] = useState([]);
   const [showAssignUserModal, setShowAssignUserModal] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showActivityLogs, setShowActivityLogs] = useState(false);
 
   const fetchShips = async () => {
     setLoading(true);
@@ -89,6 +93,14 @@ const AdminDashboard = ({ user, handleLogout }) => {
   const handleShipSelect = (ship) => {
     setSelectedShip(ship);
     fetchFindings(ship.id);
+    
+    // Log ship selection activity
+    logShipActivity(
+      user, 
+      ACTIVITY_TYPES.VIEW, 
+      `Melihat detail kapal: ${ship.ship_name}`, 
+      ship
+    );
   };
 
   const handleShipAdded = async () => {
@@ -103,6 +115,12 @@ const AdminDashboard = ({ user, handleLogout }) => {
     });
     await fetchShips();
   };
+
+  // Filter ships based on search term
+  const filteredShips = ships.filter(ship => 
+    ship.ship_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    ship.ship_code.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <>
@@ -181,12 +199,15 @@ const AdminDashboard = ({ user, handleLogout }) => {
           </div>
         </nav>
         <div className="container-main py-4">
-          {selectedShip ? (
+          {showActivityLogs ? (
+            <ActivityLogs onBack={() => setShowActivityLogs(false)} />
+          ) : selectedShip ? (
             <ShipDetails
               selectedShip={selectedShip}
               onBack={() => setSelectedShip(null)}
               showAddForm={showAddFindingForm}
               setShowAddForm={setShowAddFindingForm}
+              user={user}
             />
           ) : (
             <div className="p-4">
@@ -196,6 +217,14 @@ const AdminDashboard = ({ user, handleLogout }) => {
                   <p className="text-muted mb-0">Pilih kapal yang akan diinspeksi</p>
                 </div>
                 <div className="d-flex gap-2">
+                  <button
+                    className="btn btn-info d-flex align-items-center"
+                    onClick={() => setShowActivityLogs(true)}
+                    disabled={loading}
+                  >
+                    <i className="bi bi-clock-history me-2"></i>
+                    Activity Logs
+                  </button>
                   <button
                     className="btn btn-secondary d-flex align-items-center"
                     onClick={() => setShowAssignUserModal(true)}
@@ -220,6 +249,52 @@ const AdminDashboard = ({ user, handleLogout }) => {
                   onShipAdded={handleShipAdded}
                   onCancel={() => setShowAddShipForm(false)}
                 />
+              )}
+
+              {/* Ship Count and Search */}
+              {!loading && (
+                <div className="mb-4">
+                  <div className="d-flex justify-content-between align-items-center mb-3">
+                    <div className="d-flex align-items-center gap-2">
+                      <h6 className="mb-0 text-muted">Total Kapal:</h6>
+                      <span className="badge bg-primary fs-6 px-3 py-2">{ships.length}</span>
+                      {searchTerm && (
+                        <>
+                          <span className="text-muted">|</span>
+                          <h6 className="mb-0 text-muted">Hasil Pencarian:</h6>
+                          <span className="badge bg-secondary fs-6 px-3 py-2">{filteredShips.length}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="row mb-3">
+                    <div className="col-md-6">
+                      <div className="input-group">
+                        <span className="input-group-text bg-white border-end-0">
+                          <i className="bi bi-search text-muted"></i>
+                        </span>
+                        <input
+                          type="text"
+                          className="form-control border-start-0 ps-0"
+                          placeholder="Cari kapal berdasarkan nama atau kode..."
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                          style={{ boxShadow: 'none' }}
+                        />
+                        {searchTerm && (
+                          <button
+                            className="btn btn-outline-secondary"
+                            type="button"
+                            onClick={() => setSearchTerm('')}
+                          >
+                            <i className="bi bi-x"></i>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               )}
 
               {/* Modal Assign User */}
@@ -248,35 +323,62 @@ const AdminDashboard = ({ user, handleLogout }) => {
                 </div>
               ) : (
                 <div className="row g-4">
-                  {ships.map(ship => (
-                    <div key={ship.id} className="col-md-4">
-                      <div 
-                        className="card h-100 ship-card"
-                        onClick={() => handleShipSelect(ship)}
-                        style={{
-                          cursor: 'pointer',
-                          border: '1px solid #e5e7eb',
-                          boxShadow: '0 2px 8px 0 rgba(0,0,0,0.06)',
-                          transition: 'border-color 0.2s',
-                        }}
-                        onMouseOver={e => e.currentTarget.style.borderColor = '#1857b7'}
-                        onMouseOut={e => e.currentTarget.style.borderColor = '#e5e7eb'}
-                      >
-                        <div className="card-body p-4">
-                          <div className="d-flex justify-content-between align-items-start mb-3">
-                            <h5 className="card-title text-dark fw-bold mb-0">{ship.ship_name}</h5>
-                            <span className="badge bg-light text-dark p-2">{ship.ship_code}</span>
-                          </div>
-                          <div className="d-flex align-items-center text-muted">
-                            <i className="bi bi-calendar-check me-2"></i>
-                            <small>
-                              Last Inspection: {new Date(ship.last_inspection).toLocaleDateString()}
-                            </small>
+                  {filteredShips.length > 0 ? (
+                    filteredShips.map(ship => (
+                      <div key={ship.id} className="col-md-4">
+                        <div 
+                          className="card h-100 ship-card"
+                          onClick={() => handleShipSelect(ship)}
+                          style={{
+                            cursor: 'pointer',
+                            border: '1px solid #e5e7eb',
+                            boxShadow: '0 2px 8px 0 rgba(0,0,0,0.06)',
+                            transition: 'border-color 0.2s',
+                          }}
+                          onMouseOver={e => e.currentTarget.style.borderColor = '#1857b7'}
+                          onMouseOut={e => e.currentTarget.style.borderColor = '#e5e7eb'}
+                        >
+                          <div className="card-body p-4">
+                            <div className="d-flex justify-content-between align-items-start mb-3">
+                              <h5 className="card-title text-dark fw-bold mb-0">{ship.ship_name}</h5>
+                              <span className="badge bg-light text-dark p-2">{ship.ship_code}</span>
+                            </div>
+                            <div className="d-flex align-items-center text-muted">
+                              <i className="bi bi-calendar-check me-2"></i>
+                              <small>
+                                Last Inspection: {new Date(ship.last_inspection).toLocaleDateString()}
+                              </small>
+                            </div>
                           </div>
                         </div>
                       </div>
+                    ))
+                  ) : (
+                    <div className="col-12">
+                      <div className="text-center py-5">
+                        <div className="text-muted">
+                          <i className="bi bi-search fs-1 d-block mb-3"></i>
+                          {searchTerm ? (
+                            <>
+                              <h5>Tidak ada kapal yang ditemukan</h5>
+                              <p>Tidak ada kapal yang cocok dengan pencarian "<strong>{searchTerm}</strong>"</p>
+                              <button 
+                                className="btn btn-primary"
+                                onClick={() => setSearchTerm('')}
+                              >
+                                Tampilkan Semua Kapal
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <h5>Belum ada kapal yang terdaftar</h5>
+                              <p>Mulai dengan menambahkan kapal baru</p>
+                            </>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
             </div>

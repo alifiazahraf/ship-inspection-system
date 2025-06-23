@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
 import ShipDetails from './ShipDetails';
 import logo from '../assets/images/gls-logo.png';
+import { logShipActivity, ACTIVITY_TYPES } from '../utils/logging';
 
 const UserDashboard = ({ user, handleLogout }) => {
   const [ships, setShips] = useState([]);
@@ -117,6 +118,7 @@ const UserDashboard = ({ user, handleLogout }) => {
             selectedShip={selectedShip}
             onBack={() => setSelectedShip(null)}
             role="user"
+            user={user}
           />
         ) : loading ? (
           <div className="text-center py-5">
@@ -140,7 +142,16 @@ const UserDashboard = ({ user, handleLogout }) => {
                     boxShadow: '0 2px 8px 0 rgba(0,0,0,0.06)',
                     transition: 'border-color 0.2s',
                   }}
-                  onClick={() => setSelectedShip(ship)}
+                  onClick={() => {
+                    setSelectedShip(ship);
+                    // Log ship selection activity
+                    logShipActivity(
+                      user,
+                      ACTIVITY_TYPES.VIEW,
+                      `User melihat detail kapal: ${ship.ship_name}`,
+                      ship
+                    );
+                  }}
                   onMouseOver={e => e.currentTarget.style.borderColor = '#1857b7'}
                   onMouseOut={e => e.currentTarget.style.borderColor = '#e5e7eb'}
                 >
