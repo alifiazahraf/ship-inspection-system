@@ -236,6 +236,57 @@ FROM pg_tables
 WHERE tablename = 'activity_logs';
 ```
 
+### Error: permission denied for table users
+
+**Masalah**: Ketika mengakses Activity Logs muncul error "permission denied for table users"
+
+**Penyebab**: 
+1. RLS (Row Level Security) policy yang terlalu ketat pada tabel `activity_logs`
+2. Foreign key constraint ke `auth.users` yang menyebabkan permission issue
+3. Kurangnya grant permissions untuk authenticated users
+
+**Solusi**:
+
+Jalankan script SQL berikut di Supabase SQL Editor:
+
+```sql
+-- Simple fix untuk masalah permission pada activity_logs
+-- Menghilangkan foreign key constraint dan menggunakan RLS policy yang sederhana
+
+-- 1. Drop foreign key constraint jika ada
+ALTER TABLE activity_logs DROP CONSTRAINT IF EXISTS activity_logs_user_id_fkey;
+
+-- 2. Drop existing RLS policies
+DROP POLICY IF EXISTS "Enable read access for all users" ON activity_logs;
+DROP POLICY IF EXISTS "Enable insert for authenticated users only" ON activity_logs;
+DROP POLICY IF EXISTS "Enable all operations for authenticated users" ON activity_logs;
+
+-- 3. Enable RLS
+ALTER TABLE activity_logs ENABLE ROW LEVEL SECURITY;
+
+-- 4. Create simple policies yang memungkinkan semua authenticated users
+CREATE POLICY "Allow all operations for authenticated users" ON activity_logs
+    FOR ALL
+    TO authenticated
+    USING (true)
+    WITH CHECK (true);
+
+-- 5. Grant permissions
+GRANT ALL ON activity_logs TO authenticated;
+GRANT USAGE ON SEQUENCE activity_logs_id_seq TO authenticated;
+```
+
+**Verifikasi**:
+Setelah menjalankan script, coba akses Activity Logs lagi dari aplikasi.
+
+**Mengapa Foreign Key Constraint Dihapus?**
+
+Dalam tabel `activity_logs`, kita sudah menyimpan `user_email` dan `user_role` langsung sebagai text fields. Foreign key constraint ke `auth.users` tidak diperlukan karena:
+
+1. Data user sudah tersimpan lengkap di setiap log entry
+2. Menghindari kompleksitas permission dengan auth schema
+3. Memungkinkan log tetap ada meskipun user dihapus dari sistem
+
 ## Support
 
 If you encounter issues:

@@ -1,26 +1,27 @@
 import React, { useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { toast } from 'react-toastify';
+import { 
+  FINDING_CATEGORIES, 
+  FINDING_STATUSES, 
+  PIC_SHIP_OPTIONS, 
+  PIC_OFFICE_OPTIONS,
+  DEFAULT_CATEGORY,
+  DEFAULT_STATUS
+} from '../constants/findingData';
 
 const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
   const [formData, setFormData] = useState({
     finding: '',
     picShip: '',
     picOffice: '',
-    category: 'Safety',
-    status: 'Open',
+    category: DEFAULT_CATEGORY,
+    status: DEFAULT_STATUS,
     date: new Date().toISOString().split('T')[0]
   });
   const [beforePhoto, setBeforePhoto] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
-  const categories = [
-    'Safety', 'Environmental', 'Operational', 'Structural', 
-    'Machinery', 'Navigation', 'Documentation', 'Security'
-  ];
-
-  const statuses = ['Open', 'Closed'];
 
   const handleInputChange = (e) => {
     setFormData({
@@ -105,8 +106,8 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
           finding: '',
           picShip: '',
           picOffice: '',
-          category: 'Safety',
-          status: 'Open',
+          category: DEFAULT_CATEGORY,
+          status: DEFAULT_STATUS,
           date: new Date().toISOString().split('T')[0]
         });
         setBeforePhoto(null);
@@ -135,36 +136,6 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
       toast.error('Backend connection failed: ' + error.message);
     }
   };
-
-  // Test function untuk debugging token
-  // const testTokenAuth = async () => {
-  //   try {
-  //     console.log('Testing token authentication...');
-  //     console.log('Using token:', token ? token.substring(0, 20) + '...' : 'null');
-      
-  //     const response = await fetch('http://localhost:5000/api/ships', {
-  //       method: 'GET',
-  //       headers: {
-  //         'Authorization': `Bearer ${token}`
-  //       }
-  //     });
-      
-  //     console.log('Auth test response status:', response.status);
-      
-  //     if (response.ok) {
-  //       const data = await response.json();
-  //       console.log('Auth test success:', data);
-  //       alert('Token authentication OK! Ships: ' + data.length);
-  //     } else {
-  //       const text = await response.text();
-  //       console.error('Auth test failed:', text);
-  //       alert('Token authentication failed: ' + text);
-  //     }
-  //   } catch (error) {
-  //     console.error('Auth test error:', error);
-  //     alert('Auth test error: ' + error.message);
-  //   }
-  // };
 
   return (
     <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
@@ -232,7 +203,7 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
                       required
                       disabled={loading}
                     >
-                      {categories.map(cat => (
+                      {FINDING_CATEGORIES.map(cat => (
                         <option key={cat} value={cat}>{cat}</option>
                       ))}
                     </select>
@@ -249,7 +220,7 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
                       required
                       disabled={loading}
                     >
-                      {statuses.map(status => (
+                      {FINDING_STATUSES.map(status => (
                         <option key={status} value={status}>{status}</option>
                       ))}
                     </select>
@@ -308,31 +279,37 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
                 <div className="col-md-6">
                   <div className="mb-3">
                     <label className="form-label">PIC Kapal *</label>
-                    <input
-                      type="text"
-                      className="form-control"
+                    <select
+                      className="form-select"
                       name="picShip"
                       value={formData.picShip}
                       onChange={handleInputChange}
                       required
-                      placeholder="Nama PIC dari kapal"
                       disabled={loading}
-                    />
+                    >
+                      <option value="">Pilih PIC Kapal</option>
+                      {PIC_SHIP_OPTIONS.map(pic => (
+                        <option key={pic} value={pic}>{pic}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
                 <div className="col-md-6">
                   <div className="mb-3">
                     <label className="form-label">PIC Kantor *</label>
-                    <input
-                      type="text"
-                      className="form-control"
+                    <select
+                      className="form-select"
                       name="picOffice"
                       value={formData.picOffice}
                       onChange={handleInputChange}
                       required
-                      placeholder="Nama PIC dari kantor"
                       disabled={loading}
-                    />
+                    >
+                      <option value="">Pilih PIC Kantor</option>
+                      {PIC_OFFICE_OPTIONS.map(pic => (
+                        <option key={pic} value={pic}>{pic}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </div>
