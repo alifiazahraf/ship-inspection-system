@@ -44,16 +44,29 @@ const AdminDashboard = ({ user, handleLogout }) => {
         return;
       }
 
-      // Process ships to include latest inspection date
+      // Process ships to include latest inspection date and NC counts
       const processedShips = shipsData.map(ship => {
         const shipFindings = findingsData.filter(f => f.ship_id === ship.id);
+        // Count NC Open and NC Closed
+        const ncOpen = shipFindings.filter(f => f.status === 'Open' || f.status === 'open').length;
+        const ncClosed = shipFindings.filter(f => f.status === 'Closed' || f.status === 'closed').length;
+        
         if (shipFindings.length > 0) {
           const latestDate = shipFindings.reduce((latest, finding) => {
             return finding.date > latest ? finding.date : latest;
           }, shipFindings[0].date);
-          return { ...ship, last_inspection: latestDate };
+          return { 
+            ...ship, 
+            last_inspection: latestDate,
+            nc_open: ncOpen,
+            nc_closed: ncClosed
+          };
         }
-        return ship;
+        return { 
+          ...ship, 
+          nc_open: ncOpen,
+          nc_closed: ncClosed
+        };
       });
 
       setShips(processedShips);
@@ -343,10 +356,35 @@ const AdminDashboard = ({ user, handleLogout }) => {
                               <h5 className="card-title text-dark fw-bold mb-0">{ship.ship_name}</h5>
                               <span className="badge bg-light text-dark p-2">{ship.ship_code}</span>
                             </div>
+                            
+                            {/* NC Status */}
+                            <div className="row mb-3">
+                              <div className="col-6">
+                                <div className="d-flex align-items-center">
+                                  <div className="me-2">
+                                    <span className="badge bg-danger text-white px-2 py-1">
+                                      {ship.nc_open || 0}
+                                    </span>
+                                  </div>
+                                  <small className="text-muted">NC Open</small>
+                                </div>
+                              </div>
+                              <div className="col-6">
+                                <div className="d-flex align-items-center">
+                                  <div className="me-2">
+                                    <span className="badge bg-success text-white px-2 py-1">
+                                      {ship.nc_closed || 0}
+                                    </span>
+                                  </div>
+                                  <small className="text-muted">NC Closed</small>
+                                </div>
+                              </div>
+                            </div>
+                            
                             <div className="d-flex align-items-center text-muted">
                               <i className="bi bi-calendar-check me-2"></i>
                               <small>
-                                Last Inspection: {new Date(ship.last_inspection).toLocaleDateString()}
+                                Last Inspection: {ship.last_inspection ? new Date(ship.last_inspection).toLocaleDateString() : 'Belum ada inspeksi'}
                               </small>
                             </div>
                           </div>
