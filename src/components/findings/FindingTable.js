@@ -31,7 +31,6 @@ const FindingTable = ({
   const PhotoCell = ({ photoString, type, finding }) => {
     const photoCount = getPhotoCount(photoString);
     const firstPhotoUrl = getFirstPhotoUrl(photoString);
-    const allPhotos = parsePhotoUrls(photoString);
 
     if (photoCount === 0) {
       if (type === 'after') {
