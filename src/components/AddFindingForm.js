@@ -9,6 +9,8 @@ import {
   DEFAULT_CATEGORY,
   DEFAULT_STATUS
 } from '../constants/findingData';
+import { uploadMultiplePhotos, serializePhotoUrls } from '../utils/photoUtils';
+import PhotoPreview from './findings/PhotoPreview';
 
 const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
   const [formData, setFormData] = useState({
@@ -19,7 +21,7 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
     status: DEFAULT_STATUS,
     date: new Date().toISOString().split('T')[0]
   });
-  const [beforePhoto, setBeforePhoto] = useState(null);
+  const [beforePhotos, setBeforePhotos] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -30,30 +32,13 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
     });
   };
 
-  const uploadPhoto = async (file, type) => {
-    if (!file) return null;
-    
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${selectedShip.id}/${type}_${Date.now()}.${fileExt}`;
-    const filePath = `findings/${fileName}`;
+  const handleBeforePhotosChange = (e) => {
+    const files = Array.from(e.target.files);
+    setBeforePhotos(prev => [...prev, ...files]);
+  };
 
-    try {
-      const { error } = await supabase.storage
-        .from('finding-images')
-        .upload(filePath, file);
-
-      if (error) throw error;
-
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('finding-images')
-        .getPublicUrl(filePath);
-
-      return publicUrl;
-    } catch (error) {
-      console.error('Error uploading photo:', error);
-      throw error;
-    }
+  const removeBeforePhoto = (index) => {
+    setBeforePhotos(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleSubmit = async (e) => {
@@ -62,10 +47,10 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
     setError('');
 
     try {
-      // Upload before photo if exists
-      let beforePhotoUrl = null;
-      if (beforePhoto) {
-        beforePhotoUrl = await uploadPhoto(beforePhoto, 'before');
+      // Upload before photos if exist
+      let beforePhotoUrls = [];
+      if (beforePhotos.length > 0) {
+        beforePhotoUrls = await uploadMultiplePhotos(beforePhotos, selectedShip.id, 'before', supabase);
       }
 
       // First, get the latest finding number for this ship
@@ -94,7 +79,8 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
           date: formData.date,
           pic_ship: formData.picShip,
           pic_office: formData.picOffice,
-          before_photo: beforePhotoUrl,
+          before_photo: serializePhotoUrls(beforePhotoUrls),
+          after_photo: '', // Empty string for new findings
           created_by: 'admin' // You might want to get this from your auth context
         }]);
 
@@ -110,7 +96,8 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
           status: DEFAULT_STATUS,
           date: new Date().toISOString().split('T')[0]
         });
-        setBeforePhoto(null);
+        setBeforePhotos([]);
+        toast.success('Temuan berhasil ditambahkan!');
         onFindingAdded(); // Call without parameters since we'll fetch fresh data
       }
     } catch (error) {
@@ -163,13 +150,6 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
                     >
                       Test Koneksi Backend
                     </button>
-                    {/* <button 
-                      type="button" 
-                      className="btn btn-sm btn-outline-primary"
-                      onClick={testTokenAuth}
-                    >
-                      Test Token Auth
-                    </button> */}
                   </div>
                 </small>
               </div>
@@ -228,38 +208,27 @@ const AddFindingForm = ({ selectedShip, onFindingAdded, onCancel }) => {
                 </div>
               </div>
 
-              <div className="row">
-                <div className="col-md-6">
-                  <div className="mb-3">
-                    <label className="form-label">Foto Before</label>
-                    <input
-                      type="file"
-                      className="form-control"
-                      accept="image/*"
-                      onChange={(e) => setBeforePhoto(e.target.files[0])}
-                      disabled={loading}
-                    />
-                    <div className="form-text">Format: JPG, PNG, GIF. Max: 5MB</div>
-                  </div>
+              <div className="mb-3">
+                <label className="form-label">Foto Before</label>
+                <input
+                  type="file"
+                  className="form-control"
+                  accept="image/*"
+                  multiple
+                  onChange={handleBeforePhotosChange}
+                  disabled={loading}
+                />
+                <div className="form-text">
+                  Format: JPG, PNG, GIF. Max: 5MB per file. Pilih multiple files dengan Ctrl/Cmd+Click
                 </div>
               </div>
 
-              {beforePhoto && (
-                <div className="mb-3">
-                  <label className="form-label">Preview Foto Before:</label>
-                  <div className="border rounded p-2">
-                    <img 
-                      src={URL.createObjectURL(beforePhoto)} 
-                      alt="Preview" 
-                      className="img-fluid rounded"
-                      style={{ maxHeight: '200px', width: '100%', objectFit: 'cover' }}
-                    />
-                    <small className="text-muted d-block mt-1">
-                      File: {beforePhoto.name} ({(beforePhoto.size / 1024 / 1024).toFixed(2)} MB)
-                    </small>
-                  </div>
-                </div>
-              )}
+              {/* Photo Preview */}
+              <PhotoPreview 
+                photos={beforePhotos}
+                label="Preview Foto Before"
+                onRemovePhoto={removeBeforePhoto}
+              />
 
               <div className="mb-3">
                 <label className="form-label">Deskripsi Temuan *</label>

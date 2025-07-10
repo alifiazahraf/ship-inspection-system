@@ -15,7 +15,8 @@ const FormInput = ({
   rows = null,
   accept = null,
   max = null,
-  min = null
+  min = null,
+  multiple = false
 }) => {
   const InputComponent = type === 'textarea' ? 'textarea' : 'input';
   
@@ -39,6 +40,7 @@ const FormInput = ({
         accept={accept}
         max={max}
         min={min}
+        multiple={multiple}
       />
       {helpText && <div className="form-text">{helpText}</div>}
       {error && <div className="invalid-feedback">{error}</div>}

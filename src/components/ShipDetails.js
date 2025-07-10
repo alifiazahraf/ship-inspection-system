@@ -8,22 +8,112 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { logFindingActivity, logShipActivity, ACTIVITY_TYPES } from '../utils/logging';
 import { debugUser } from '../utils/debug';
+import { 
+  getPhotoCount, 
+  getFirstPhotoUrl, 
+  parsePhotoUrls, 
+  addPhotoUrl, 
+  uploadMultiplePhotos,
+  deletePhotosFromStorage 
+} from '../utils/photoUtils';
 
 const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role = 'admin', user }) => {
   const [findings, setFindings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [assignedUser, setAssignedUser] = useState(null);
   const [loadingUser, setLoadingUser] = useState(true);
-  const [selectedImage, setSelectedImage] = useState(null);
+
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedFinding, setSelectedFinding] = useState(null);
   const [showEditForm, setShowEditForm] = useState(false);
-  const [afterPhoto, setAfterPhoto] = useState(null);
+  const [afterPhotos, setAfterPhotos] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [latestInspectionDate, setLatestInspectionDate] = useState(selectedShip.last_inspection);
   const [downloadingPDF, setDownloadingPDF] = useState(false);
   const [showDeleteAfterModal, setShowDeleteAfterModal] = useState(false);
   const [findingToDeleteAfter, setFindingToDeleteAfter] = useState(null);
+
+  
+  // Photo gallery modal state
+  const [photoGallery, setPhotoGallery] = useState({
+    isOpen: false,
+    photos: [],
+    currentIndex: 0,
+    title: ''
+  });
+
+  // Photo gallery functions
+  const openPhotoGallery = (photoString, type, finding, clickedIndex = 0) => {
+    const photos = parsePhotoUrls(photoString);
+    setPhotoGallery({
+      isOpen: true,
+      photos: photos,
+      currentIndex: clickedIndex,
+      title: `${type === 'before' ? 'Foto Before' : 'Foto After'} - Temuan No.${finding.no} `
+    });
+  };
+
+  const closePhotoGallery = () => {
+    setPhotoGallery({
+      isOpen: false,
+      photos: [],
+      currentIndex: 0,
+      title: ''
+    });
+  };
+
+  const nextPhoto = () => {
+    setPhotoGallery(prev => ({
+      ...prev,
+      currentIndex: (prev.currentIndex + 1) % prev.photos.length
+    }));
+  };
+
+  const prevPhoto = () => {
+    setPhotoGallery(prev => ({
+      ...prev,
+      currentIndex: prev.currentIndex === 0 ? prev.photos.length - 1 : prev.currentIndex - 1
+    }));
+  };
+
+  const goToPhoto = (index) => {
+    setPhotoGallery(prev => ({
+      ...prev,
+      currentIndex: index
+    }));
+  };
+
+  // Keyboard navigation for photo gallery
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (!photoGallery.isOpen) return;
+      
+      switch (event.key) {
+        case 'ArrowLeft':
+          event.preventDefault();
+          prevPhoto();
+          break;
+        case 'ArrowRight':
+          event.preventDefault();
+          nextPhoto();
+          break;
+        case 'Escape':
+          event.preventDefault();
+          closePhotoGallery();
+          break;
+        default:
+          break;
+      }
+    };
+
+    if (photoGallery.isOpen) {
+      document.addEventListener('keydown', handleKeyDown);
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [photoGallery.isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchShipData = async () => {
     setLoading(true);
@@ -106,50 +196,53 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     setShowUploadModal(true);
   };
 
+  const handleAfterPhotosChange = (e) => {
+    const files = Array.from(e.target.files);
+    setAfterPhotos(files);
+  };
+
   const handleSubmitAfterPhoto = async () => {
-    if (!afterPhoto) return;
+    if (afterPhotos.length === 0) return;
     setUploading(true);
-    const fileExt = afterPhoto.name.split('.').pop();
-    const fileName = `${selectedShip.id}/after_${Date.now()}.${fileExt}`;
-    const filePath = `findings/${fileName}`;
     
-    const { error: uploadError } = await supabase.storage
-      .from('finding-images')
-      .upload(filePath, afterPhoto);
+    try {
+      // Upload multiple photos
+      const uploadedUrls = await uploadMultiplePhotos(afterPhotos, selectedShip.id, 'after', supabase);
+      
+      // Add to existing photos
+      const updatedPhotoString = addPhotoUrl(selectedFinding.after_photo, ...uploadedUrls);
+      
+      const { error } = await supabase
+        .from('findings')
+        .update({ after_photo: updatedPhotoString })
+        .eq('id', selectedFinding.id);
 
-    if (uploadError) {
-      toast.error('Gagal upload foto.');
-      setUploading(false);
-      return;
-    }
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('finding-images')
-      .getPublicUrl(filePath);
-
-    await supabase.from('findings').update({ after_photo: publicUrl }).eq('id', selectedFinding.id);
+      if (error) throw error;
     
     setShowUploadModal(false);
-    setAfterPhoto(null);
+      setAfterPhotos([]);
     setSelectedFinding(null);
     setUploading(false);
-    toast.success('Foto after berhasil diupload!');
+      toast.success(`${uploadedUrls.length} foto after berhasil diupload!`);
     fetchShipData();
     
     // Log after photo upload activity
     if (user) {
-      // Debug user object
       debugUser(user, 'handleSubmitAfterPhoto');
       
       logFindingActivity(
         user,
         ACTIVITY_TYPES.UPDATE,
-        `Mengupload foto after untuk temuan No.${selectedFinding.no} pada kapal: ${selectedShip.ship_name}`,
+          `Mengupload ${uploadedUrls.length} foto after untuk temuan No.${selectedFinding.no} pada kapal: ${selectedShip.ship_name}`,
         selectedFinding,
         selectedShip,
-        { ...selectedFinding, after_photo: null }, // old_data
-        { ...selectedFinding, after_photo: publicUrl } // new_data
+          { ...selectedFinding, after_photo: selectedFinding.after_photo }, // old_data
+          { ...selectedFinding, after_photo: updatedPhotoString } // new_data
       );
+      }
+    } catch (error) {
+      toast.error('Gagal upload foto: ' + error.message);
+      setUploading(false);
     }
   };
 
@@ -189,8 +282,16 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           <button
             className="btn btn-sm btn-danger"
             onClick={async () => {
-              toast.dismiss();
               try {
+                // Delete photos from storage
+                const beforePhotoUrls = parsePhotoUrls(finding.before_photo);
+                const afterPhotoUrls = parsePhotoUrls(finding.after_photo);
+                const allPhotoUrls = [...beforePhotoUrls, ...afterPhotoUrls];
+                
+                if (allPhotoUrls.length > 0) {
+                  await deletePhotosFromStorage(allPhotoUrls, supabase);
+                }
+
                 const { error } = await supabase
                   .from('findings')
                   .delete()
@@ -204,38 +305,40 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                   
                   // Log finding deletion activity
                   if (user) {
+                    debugUser(user, 'handleDeleteFinding');
+                    
                     logFindingActivity(
                       user,
                       ACTIVITY_TYPES.DELETE,
-                      `Menghapus temuan No.${finding.no}: ${finding.finding} pada kapal: ${selectedShip.ship_name}`,
+                      `Menghapus temuan No.${finding.no} pada kapal: ${selectedShip.ship_name}`,
                       finding,
-                      selectedShip,
-                      finding // old_data
+                      selectedShip
                     );
                   }
                 }
               } catch (error) {
+                console.error('Error deleting finding:', error);
                 toast.error('Terjadi kesalahan saat menghapus temuan');
               }
+              toast.dismiss();
             }}
           >
-            Ya, Hapus
+            Hapus
           </button>
         </div>
       </div>,
       {
         position: "top-center",
         autoClose: false,
+        hideProgressBar: true,
         closeOnClick: false,
+        pauseOnHover: true,
         draggable: false,
-        closeButton: false,
-        className: 'bg-white'
       }
     );
   };
 
-  const handleDeleteAfterPhoto = async (finding) => {
-    console.log('handleDeleteAfterPhoto called:', finding);
+  const handleDeleteAfterPhoto = (finding) => {
     setFindingToDeleteAfter(finding);
     setShowDeleteAfterModal(true);
   };
@@ -244,6 +347,12 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     if (!findingToDeleteAfter) return;
     
     try {
+      // Delete all after photos from storage
+      const afterPhotoUrls = parsePhotoUrls(findingToDeleteAfter.after_photo);
+      if (afterPhotoUrls.length > 0) {
+        await deletePhotosFromStorage(afterPhotoUrls, supabase);
+      }
+
       const { error } = await supabase
         .from('findings')
         .update({ after_photo: null })
@@ -252,18 +361,17 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       if (error) {
         toast.error('Gagal menghapus foto after: ' + error.message);
       } else {
-        toast.success('Foto after berhasil dihapus!');
+        toast.success('Semua foto after berhasil dihapus!');
         await fetchShipData();
         
         // Log after photo deletion activity
         if (user) {
-          // Debug user object
           debugUser(user, 'confirmDeleteAfterPhoto');
           
           logFindingActivity(
             user,
             ACTIVITY_TYPES.UPDATE,
-            `Menghapus foto after untuk temuan No.${findingToDeleteAfter.no} pada kapal: ${selectedShip.ship_name}`,
+            `Menghapus semua foto after untuk temuan No.${findingToDeleteAfter.no} pada kapal: ${selectedShip.ship_name}`,
             findingToDeleteAfter,
             selectedShip,
             { ...findingToDeleteAfter }, // old_data
@@ -280,46 +388,24 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     }
   };
 
-  // Helper function to convert image URL to base64 with compression
-  const getBase64FromImageUrl = (url) => {
+  // Get base64 from image URL for PDF generation
+  const getBase64FromImageUrl = async (url) => {
+    try {
+      const response = await fetch(url, { mode: 'cors' });
+      const blob = await response.blob();
     return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
-        // Resize image to smaller dimensions for PDF
-        const maxWidth = 300;
-        const maxHeight = 200;
-        let { width, height } = img;
-        
-        // Calculate new dimensions while maintaining aspect ratio
-        if (width > maxWidth) {
-          height = (height * maxWidth) / width;
-          width = maxWidth;
-        }
-        if (height > maxHeight) {
-          width = (width * maxHeight) / height;
-          height = maxHeight;
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        
-        // Draw and compress image
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        // Use lower quality for smaller file size (0.3 = 30% quality)
-        const dataURL = canvas.toDataURL('image/jpeg', 0.3);
-        resolve(dataURL);
-      };
-      img.onerror = () => resolve(null);
-      img.src = url;
-    });
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch (error) {
+      console.error('Error converting image to base64:', error);
+      return null;
+    }
   };
 
-  const handleDownloadPDF = async () => {
+    const handleDownloadPDF = async () => {
     setDownloadingPDF(true);
     
     try {
@@ -355,7 +441,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       doc.setFont('helvetica', 'normal');
       const shipInfoY = 90;
       doc.text(`Nama Kapal: ${selectedShip.ship_name}`, 50, shipInfoY);
-      doc.text(`Inspeksi Terakhir: ${new Date(latestInspectionDate).toLocaleDateString('id-ID')}`, 300, shipInfoY);
+      doc.text(`Inspeksi Terakhir: ${latestInspectionDate ? new Date(latestInspectionDate).toLocaleDateString('id-ID') : 'Belum ada'}`, 300, shipInfoY);
       doc.text(`Kode Kapal: ${selectedShip.ship_code}`, 550, shipInfoY);
       
       doc.text(`Total Temuan: ${findings.length}`, 50, shipInfoY + 20);
@@ -382,13 +468,16 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       // Preload all images and convert to base64
       const imagePromises = [];
       findings.forEach(finding => {
-        if (finding.before_photo) {
-          imagePromises.push(getBase64FromImageUrl(finding.before_photo));
+        const beforeUrl = getFirstPhotoUrl(finding.before_photo);
+        const afterUrl = getFirstPhotoUrl(finding.after_photo);
+        
+        if (beforeUrl) {
+          imagePromises.push(getBase64FromImageUrl(beforeUrl));
         } else {
           imagePromises.push(Promise.resolve(null));
         }
-        if (finding.after_photo) {
-          imagePromises.push(getBase64FromImageUrl(finding.after_photo));
+        if (afterUrl) {
+          imagePromises.push(getBase64FromImageUrl(afterUrl));
         } else {
           imagePromises.push(Promise.resolve(null));
         }
@@ -396,19 +485,24 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
 
       const images = await Promise.all(imagePromises);
       
-      const tableRows = findings.map((finding, index) => ({
-        no: finding.no,
-        date: new Date(finding.date).toLocaleDateString('id-ID'),
-        finding: finding.finding,
-        category: finding.category,
-        pic_ship: finding.pic_ship,
-        pic_office: finding.pic_office,
-        status: finding.status,
-        before_photo: finding.before_photo,
-        after_photo: finding.after_photo,
-        before_image_data: images[index * 2],
-        after_image_data: images[index * 2 + 1]
-      }));
+      const tableRows = findings.map((finding, index) => {
+        const beforeCount = getPhotoCount(finding.before_photo);
+        const afterCount = getPhotoCount(finding.after_photo);
+        
+        return {
+          no: finding.no,
+          date: new Date(finding.date).toLocaleDateString('id-ID'),
+          finding: finding.finding,
+          category: finding.category,
+          pic_ship: finding.pic_ship,
+          pic_office: finding.pic_office,
+          status: finding.status,
+          before_photo: beforeCount > 0 ? (beforeCount > 1 ? `${beforeCount} foto` : 'Ada') : 'Tidak Ada',
+          after_photo: afterCount > 0 ? (afterCount > 1 ? `${afterCount} foto` : 'Ada') : 'Tidak Ada',
+          before_image_data: images[index * 2],
+          after_image_data: images[index * 2 + 1]
+        };
+      });
 
       // Configure table styles with adjusted column widths
       const tableOptions = {
@@ -416,7 +510,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         head: [tableColumns.map(col => col.header)],
         body: tableRows.map(row => tableColumns.map(col => {
           if (col.dataKey === 'before_photo' || col.dataKey === 'after_photo') {
-            return row[col.dataKey] ? '' : 'Tidak Ada'; // Empty string for images, will be handled by didDrawCell
+            return row[col.dataKey] === 'Ada' ? '' : row[col.dataKey]; // Empty string for single images, will be handled by didDrawCell
           }
           return row[col.dataKey];
         })),
@@ -483,14 +577,183 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       // Add table to PDF
       autoTable(doc, tableOptions);
 
-      // Add footer with page numbers
-      const pageCount = doc.internal.getNumberOfPages();
-      for (let i = 1; i <= pageCount; i++) {
+      // Add Photo Detail Section for findings with multiple photos
+      const findingsWithMultiplePhotos = findings.filter(finding => 
+        getPhotoCount(finding.before_photo) > 1 || getPhotoCount(finding.after_photo) > 1
+      );
+
+      if (findingsWithMultiplePhotos.length > 0) {
+        // Add new page for photo details
+        doc.addPage();
+        
+        // Detail section header
+        doc.setFontSize(16);
+        doc.setFont('helvetica', 'bold');
+        doc.text('DETAIL FOTO TEMUAN', doc.internal.pageSize.getWidth() / 2, 50, { align: 'center' });
+        
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Kapal: ${selectedShip.ship_name} (${selectedShip.ship_code})`, 50, 75);
+        
+        // Add line separator
+        doc.setLineWidth(0.5);
+        doc.line(50, 85, doc.internal.pageSize.getWidth() - 50, 85);
+
+        let currentY = 100;
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const margin = 50;
+        const maxWidth = pageWidth - (margin * 2);
+
+        // Preload all photos for detail section
+        const detailImagePromises = [];
+        findingsWithMultiplePhotos.forEach(finding => {
+          const beforeUrls = parsePhotoUrls(finding.before_photo);
+          const afterUrls = parsePhotoUrls(finding.after_photo);
+          
+          beforeUrls.forEach(url => detailImagePromises.push(getBase64FromImageUrl(url)));
+          afterUrls.forEach(url => detailImagePromises.push(getBase64FromImageUrl(url)));
+        });
+
+        const detailImages = await Promise.all(detailImagePromises);
+        let imageIndex = 0;
+
+        for (const finding of findingsWithMultiplePhotos) {
+          const beforeUrls = parsePhotoUrls(finding.before_photo);
+          const afterUrls = parsePhotoUrls(finding.after_photo);
+          
+          // Check if we need a new page
+          if (currentY > pageHeight - 200) {
+            doc.addPage();
+            currentY = 50;
+          }
+
+          // Finding header
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'bold');
+          doc.text(`TEMUAN #${finding.no}: ${finding.finding.substring(0, 80)}${finding.finding.length > 80 ? '...' : ''}`, margin, currentY);
+          currentY += 20;
+
+          // Before photos section
+          if (beforeUrls.length > 1) {
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`FOTO BEFORE (${beforeUrls.length} foto):`, margin, currentY);
+            currentY += 15;
+
+            // Calculate photo layout
+            const photoWidth = 120;
+            const photoHeight = 90;
+            const photosPerRow = Math.floor(maxWidth / (photoWidth + 10));
+            let photoX = margin;
+            let photoY = currentY;
+
+            for (let i = 0; i < beforeUrls.length; i++) {
+              const imageData = detailImages[imageIndex++];
+              
+              if (imageData) {
+                try {
+                  doc.addImage(imageData, 'JPEG', photoX, photoY, photoWidth, photoHeight);
+                  
+                  // Add photo number label
+                  doc.setFontSize(8);
+                  doc.setFont('helvetica', 'normal');
+                  doc.text(`${i + 1}`, photoX + photoWidth/2, photoY + photoHeight + 10, { align: 'center' });
+                } catch (e) {
+                  // If image fails, show placeholder
+                  doc.setFillColor(240, 240, 240);
+                  doc.rect(photoX, photoY, photoWidth, photoHeight, 'F');
+                  doc.setFontSize(8);
+                  doc.setTextColor(100, 100, 100);
+                  doc.text('Foto tidak dapat dimuat', photoX + photoWidth/2, photoY + photoHeight/2, { align: 'center' });
+                  doc.setTextColor(0, 0, 0);
+                }
+              }
+
+              photoX += photoWidth + 10;
+              if ((i + 1) % photosPerRow === 0 || i === beforeUrls.length - 1) {
+                photoX = margin;
+                photoY += photoHeight + 20;
+              }
+            }
+            currentY = photoY + 10;
+          } else {
+            // Skip single before photos as they're already in main table
+            imageIndex += beforeUrls.length;
+          }
+
+          // After photos section  
+          if (afterUrls.length > 1) {
+            // Check if we need a new page
+            if (currentY > pageHeight - 200) {
+              doc.addPage();
+              currentY = 50;
+            }
+
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`FOTO AFTER (${afterUrls.length} foto):`, margin, currentY);
+            currentY += 15;
+
+            // Calculate photo layout
+            const photoWidth = 120;
+            const photoHeight = 90;
+            const photosPerRow = Math.floor(maxWidth / (photoWidth + 10));
+            let photoX = margin;
+            let photoY = currentY;
+
+            for (let i = 0; i < afterUrls.length; i++) {
+              const imageData = detailImages[imageIndex++];
+              
+              if (imageData) {
+                try {
+                  doc.addImage(imageData, 'JPEG', photoX, photoY, photoWidth, photoHeight);
+                  
+                  // Add photo number label
+                  doc.setFontSize(8);
+                  doc.setFont('helvetica', 'normal');
+                  doc.text(`${i + 1}`, photoX + photoWidth/2, photoY + photoHeight + 10, { align: 'center' });
+                } catch (e) {
+                  // If image fails, show placeholder
+                  doc.setFillColor(240, 240, 240);
+                  doc.rect(photoX, photoY, photoWidth, photoHeight, 'F');
+                  doc.setFontSize(8);
+                  doc.setTextColor(100, 100, 100);
+                  doc.text('Foto tidak dapat dimuat', photoX + photoWidth/2, photoY + photoHeight/2, { align: 'center' });
+                  doc.setTextColor(0, 0, 0);
+                }
+              }
+
+              photoX += photoWidth + 10;
+              if ((i + 1) % photosPerRow === 0 || i === afterUrls.length - 1) {
+                photoX = margin;
+                photoY += photoHeight + 20;
+              }
+            }
+            currentY = photoY + 10;
+          } else {
+            // Skip single after photos as they're already in main table
+            imageIndex += afterUrls.length;
+          }
+
+          // Add separator between findings
+          currentY += 10;
+          doc.setLineWidth(0.3);
+          doc.setDrawColor(200, 200, 200);
+          doc.line(margin, currentY, pageWidth - margin, currentY);
+          currentY += 20;
+        }
+      }
+
+      // Add footer with page numbers (recalculate after adding detail pages)
+      const finalPageCount = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= finalPageCount; i++) {
         doc.setPage(i);
         doc.setFontSize(8);
         doc.setFont('helvetica', 'normal');
+        doc.setTextColor(0, 0, 0);
         doc.text(
-          `Halaman ${i} dari ${pageCount}`,
+          `Halaman ${i} dari ${finalPageCount}`,
           doc.internal.pageSize.getWidth() / 2,
           doc.internal.pageSize.getHeight() - 30,
           { align: 'center' }
@@ -514,7 +777,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       if (user) {
         logShipActivity(
           user,
-          ACTIVITY_TYPES.VIEW,
+          ACTIVITY_TYPES.DOWNLOAD,
           `Download laporan PDF kapal: ${selectedShip.ship_name} (${findings.length} temuan)`,
           selectedShip
         );
@@ -527,53 +790,164 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     }
   };
 
+  // Photo display components
+  const PhotoCell = ({ photoString, type, finding }) => {
+    const photoCount = getPhotoCount(photoString);
+    const firstPhotoUrl = getFirstPhotoUrl(photoString);
+
+    if (photoCount === 0) {
+      if (type === 'after') {
   return (
-    <>
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <div>
-          <button 
-            className="btn btn-outline-secondary d-flex align-items-center" 
-            onClick={onBack}
-          >
-            <i className="bi bi-arrow-left me-2"></i>
-            Kembali
+          <button className="btn btn-sm btn-primary" onClick={() => handleUploadAfterPhoto(finding)}>
+            <i className="bi bi-camera me-1"></i>Add
           </button>
+        );
+      }
+      return <span className="text-muted">-</span>;
+    }
+
+    if (photoCount === 1) {
+      return (
+        <div style={{ position: 'relative', cursor: 'pointer' }}>
+          <img 
+            src={firstPhotoUrl} 
+            alt={type === 'before' ? 'Before' : 'After'} 
+            style={{ 
+              height: '170px', 
+              width: '200px',
+              objectFit: 'cover',
+              borderRadius: '4px'
+            }} 
+            onClick={() => openPhotoGallery(photoString, type, finding, 0)}
+          />
+          {type === 'after' && (
+            <div className="position-absolute top-0 end-0 m-1 d-flex flex-column gap-1">
+              <button 
+                className="btn btn-sm btn-warning"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleUploadAfterPhoto(finding);
+                }}
+                title="Upload foto after tambahan"
+                style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+              >
+                <i className="bi bi-plus"></i>
+              </button>
+              <button 
+                className="btn btn-sm btn-danger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteAfterPhoto(finding);
+                }}
+                title="Hapus foto after"
+                style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+              >
+                <i className="bi bi-trash"></i>
+              </button>
+            </div>
+          )}
         </div>
-        <div className="d-flex gap-2">
+      );
+    }
+
+    // Multiple photos
+    return (
+      <div style={{ position: 'relative', cursor: 'pointer' }}>
+        <img 
+          src={firstPhotoUrl} 
+          alt={`${type} 1 of ${photoCount}`} 
+          style={{ 
+            height: '170px', 
+            width: '200px',
+            objectFit: 'cover',
+            borderRadius: '4px'
+          }} 
+          onClick={() => openPhotoGallery(photoString, type, finding, 0)}
+        />
+        <span 
+          className="position-absolute top-0 start-0 badge bg-primary m-1"
+          style={{ fontSize: '0.8rem' }}
+        >
+          {photoCount} foto
+        </span>
+        <button
+          className="btn btn-link btn-sm position-absolute bottom-0 start-0 m-1 text-white"
+          onClick={(e) => {
+            e.stopPropagation();
+            openPhotoGallery(photoString, type, finding, 0);
+          }}
+          style={{ fontSize: '0.8rem', backgroundColor: 'rgba(0,0,0,0.7)' }}
+        >
+          Lihat Semua
+        </button>
+        {type === 'after' && (
+          <div className="position-absolute top-0 end-0 m-1 d-flex flex-column gap-1">
+            <button 
+              className="btn btn-sm btn-warning"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleUploadAfterPhoto(finding);
+              }}
+              title="Upload foto after tambahan"
+              style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+            >
+              <i className="bi bi-plus"></i>
+            </button>
+            <button 
+              className="btn btn-sm btn-danger"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteAfterPhoto(finding);
+              }}
+              title="Hapus semua foto after"
+              style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+            >
+              <i className="bi bi-trash"></i>
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+
+
+  return (
+    <div className="container-fluid mt-4">
+      <div className="d-flex justify-content-between align-items-center mb-4">
+        <div className="d-flex align-items-center">
+          <button className="btn btn-outline-secondary me-3" onClick={onBack}>
+            <i className="bi bi-arrow-left me-2"></i>Kembali
+          </button>
+          <h2 className="d-inline">Detail Kapal: {selectedShip.ship_name}</h2>
+        </div>
+        <div>
+          {role === 'admin' && (
+            <>
           <button 
-            className="btn btn-success d-flex align-items-center"
+                className="btn btn-success me-2" 
+                onClick={() => setShowAddForm(true)}
+                disabled={loading}
+          >
+                <i className="bi bi-plus-lg me-2"></i>Tambah Temuan
+          </button>
+          <button 
+                className="btn btn-info me-2" 
             onClick={handleDownloadPDF}
-            disabled={loading || loadingUser || findings.length === 0 || downloadingPDF}
-            title={
-              loading || loadingUser ? "Sedang memuat data..." :
-              findings.length === 0 ? "Tidak ada temuan untuk didownload" : 
-              downloadingPDF ? "Sedang membuat PDF..." :
-              "Download laporan temuan sebagai PDF"
-            }
+                disabled={loading || downloadingPDF}
           >
             {downloadingPDF ? (
               <>
-                <div className="spinner-border spinner-border-sm me-2" role="status">
-                  <span className="visually-hidden">Loading...</span>
-                </div>
+                    <span className="spinner-border spinner-border-sm me-2" role="status"></span>
                 Membuat PDF...
               </>
             ) : (
               <>
-                <i className="bi bi-download me-2"></i>
-                Download PDF
+                    <i className="bi bi-file-earmark-pdf me-2"></i>Download PDF
               </>
             )}
           </button>
-          {role === 'admin' && (
-            <button 
-              className="btn btn-primary d-flex align-items-center"
-              onClick={() => setShowAddForm(true)}
-              disabled={loading}
-            >
-              <i className="bi bi-plus-circle me-2"></i>
-              Tambah Temuan Baru
-            </button>
+            </>
           )}
         </div>
       </div>
@@ -603,14 +977,6 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           </div>
         </div>
       </div>
-      
-      {showAddForm && (
-        <AddFindingForm
-          selectedShip={selectedShip}
-          onFindingAdded={handleFindingAdded}
-          onCancel={() => setShowAddForm(false)}
-        />
-      )}
 
       <div className="card" style={{ border: '1px solid #dee2e6', padding: '24px' }}>
         <div className="card-header bg-white py-3">
@@ -643,7 +1009,8 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                 <tbody>
                   {findings.length > 0 ? (
                     findings.map((finding) => (
-                      <tr key={finding.id}>
+                      <React.Fragment key={finding.id}>
+                        <tr>
                         <td className="text-center"><span className="badge bg-primary rounded-pill">{finding.no}</span></td>
                         <td>{new Date(finding.date).toLocaleDateString()}</td>
                         <td className="fw-medium">{finding.finding}</td>
@@ -656,65 +1023,18 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                           </span>
                         </td>
                         <td>
-                          {finding.before_photo ? (
-                            <div style={{ cursor: 'pointer' }} onClick={() => setSelectedImage(finding.before_photo)}>
-                              <img 
-                                src={finding.before_photo} 
-                                alt="Before" 
-                                style={{ 
-                                  height: '170px', 
-                                  width: '200px',
-                                  objectFit: 'cover',
-                                  borderRadius: '4px'
-                                }} 
-                              />
-                            </div>
-                          ) : <span className="text-muted">-</span>}
+                            <PhotoCell 
+                              photoString={finding.before_photo} 
+                              type="before" 
+                              finding={finding}
+                            />
                         </td>
                         <td>
-                          {finding.after_photo ? (
-                            <div style={{ position: 'relative', cursor: 'pointer' }}>
-                              <img 
-                                src={finding.after_photo} 
-                                alt="After" 
-                                style={{ 
-                                  height: '170px', 
-                                  width: '200px',
-                                  objectFit: 'cover',
-                                  borderRadius: '4px'
-                                }} 
-                                onClick={() => setSelectedImage(finding.after_photo)}
-                              />
-                              <div className="position-absolute top-0 end-0 m-1 d-flex flex-column gap-1">
-                                <button 
-                                  className="btn btn-sm btn-warning"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleUploadAfterPhoto(finding);
-                                  }}
-                                  title="Edit foto after"
-                                  style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
-                                >
-                                  <i className="bi bi-pencil"></i>
-                                </button>
-                                <button 
-                                  className="btn btn-sm btn-danger"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteAfterPhoto(finding);
-                                  }}
-                                  title="Hapus foto after"
-                                  style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
-                                >
-                                  <i className="bi bi-trash"></i>
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <button className="btn btn-sm btn-primary" onClick={() => handleUploadAfterPhoto(finding)}>
-                              <i className="bi bi-camera me-1"></i>Add
-                            </button>
-                          )}
+                            <PhotoCell 
+                              photoString={finding.after_photo} 
+                              type="after" 
+                              finding={finding}
+                            />
                         </td>
                         {role === 'admin' && (
                           <td className="text-center">
@@ -737,6 +1057,8 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                           </td>
                         )}
                       </tr>
+
+                      </React.Fragment>
                     ))
                   ) : (
                     <tr>
@@ -755,29 +1077,58 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         </div>
       </div>
       
-      {selectedImage && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.8)' }}>
-          <div className="modal-dialog modal-lg modal-dialog-centered">
-            <div className="modal-content">
-              <div className="modal-header"><h5 className="modal-title">Preview Foto</h5><button type="button" className="btn-close" onClick={() => setSelectedImage(null)}></button></div>
-              <div className="modal-body p-0"><img src={selectedImage} alt="Finding Preview" className="img-fluid w-100" style={{ maxHeight: '80vh', objectFit: 'contain' }} /></div>
-            </div>
-          </div>
-        </div>
-      )}
+
 
       {showUploadModal && (
         <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
           <div className="modal-dialog">
             <div className="modal-content">
-              <div className="modal-header"><h5 className="modal-title">Upload Foto After</h5><button type="button" className="btn-close" onClick={() => setShowUploadModal(false)}></button></div>
+              <div className="modal-header">
+                <h5 className="modal-title">Upload Foto After - Temuan #{selectedFinding?.no}</h5>
+                <button type="button" className="btn-close" onClick={() => setShowUploadModal(false)}></button>
+              </div>
               <div className="modal-body">
-                <input type="file" className="form-control" accept="image/*" onChange={e => setAfterPhoto(e.target.files[0])} />
-                {afterPhoto && <img src={URL.createObjectURL(afterPhoto)} alt="Preview" className="img-fluid mt-2" style={{ maxHeight: 200 }} />}
+                <div className="mb-3">
+                  <label className="form-label">Pilih foto untuk diupload</label>
+                  <input 
+                    type="file" 
+                    className="form-control" 
+                    accept="image/*" 
+                    multiple
+                    onChange={handleAfterPhotosChange} 
+                  />
+                  <div className="form-text">
+                    Format: JPG, PNG, GIF. Max: 5MB per file. Pilih multiple files dengan Ctrl/Cmd+Click
+                  </div>
+                </div>
+                {afterPhotos.length > 0 && (
+                  <div>
+                    <h6>Preview ({afterPhotos.length} foto):</h6>
+                    <div className="d-flex flex-wrap gap-2">
+                      {afterPhotos.map((photo, index) => (
+                        <div key={index} className="text-center">
+                          <img 
+                            src={URL.createObjectURL(photo)} 
+                            alt={`Preview ${index + 1}`} 
+                            style={{ width: '80px', height: '60px', objectFit: 'cover' }}
+                            className="img-thumbnail"
+                          />
+                          <small className="text-muted d-block">{index + 1}</small>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="modal-footer">
                 <button className="btn btn-secondary" onClick={() => setShowUploadModal(false)}>Batal</button>
-                <button className="btn btn-success" onClick={handleSubmitAfterPhoto} disabled={uploading || !afterPhoto}>{uploading ? 'Uploading...' : 'Upload Foto'}</button>
+                <button 
+                  className="btn btn-success" 
+                  onClick={handleSubmitAfterPhoto} 
+                  disabled={uploading || afterPhotos.length === 0}
+                >
+                  {uploading ? 'Uploading...' : `Upload ${afterPhotos.length} Foto`}
+                </button>
               </div>
             </div>
           </div>
@@ -798,36 +1149,132 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           <div className="modal-dialog">
             <div className="modal-content">
               <div className="modal-header">
-                <h5 className="modal-title">Konfirmasi Hapus Foto After</h5>
-                <button 
-                  type="button" 
-                  className="btn-close" 
-                  onClick={() => setShowDeleteAfterModal(false)}
-                ></button>
+                <h5 className="modal-title">Konfirmasi Hapus</h5>
+                <button type="button" className="btn-close" onClick={() => setShowDeleteAfterModal(false)}></button>
               </div>
               <div className="modal-body">
-                <p>Apakah Anda yakin ingin menghapus foto after ini?</p>
-                <p className="text-muted small">Aksi ini tidak dapat dibatalkan.</p>
+                <p>Apakah Anda yakin ingin menghapus SEMUA foto after untuk temuan #{findingToDeleteAfter?.no}?</p>
+                <p className="text-muted small">
+                  Total foto yang akan dihapus: {getPhotoCount(findingToDeleteAfter?.after_photo)}
+                </p>
               </div>
               <div className="modal-footer">
-                <button 
-                  className="btn btn-secondary" 
-                  onClick={() => setShowDeleteAfterModal(false)}
-                >
-                  Batal
-                </button>
-                <button 
-                  className="btn btn-danger" 
-                  onClick={confirmDeleteAfterPhoto}
-                >
-                  Ya, Hapus
-                </button>
+                <button className="btn btn-secondary" onClick={() => setShowDeleteAfterModal(false)}>Batal</button>
+                <button className="btn btn-danger" onClick={confirmDeleteAfterPhoto}>Hapus Semua</button>
               </div>
             </div>
           </div>
         </div>
       )}
-    </>
+
+      {showAddForm && (
+        <AddFindingForm
+          selectedShip={selectedShip}
+          onFindingAdded={handleFindingAdded}
+          onCancel={() => setShowAddForm(false)}
+        />
+      )}
+
+      {/* Photo Gallery Modal */}
+      {photoGallery.isOpen && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.9)', zIndex: 1060 }}>
+          <div className="modal-dialog modal-xl modal-dialog-centered">
+            <div className="modal-content bg-dark">
+              <div className="modal-header border-secondary justify-content-between">
+                <h5 className="modal-title text-white">{photoGallery.title}</h5>
+                                 <div className="d-flex align-items-center ms-2">
+                  <span className="text-white me-3">
+                    {photoGallery.currentIndex + 1} dari {photoGallery.photos.length}
+                  </span>
+                  <button 
+                    type="button" 
+                    className="btn-close btn-close-white" 
+                    onClick={closePhotoGallery}
+                  ></button>
+                </div>
+              </div>
+              <div className="modal-body p-0 position-relative d-flex justify-content-center align-items-center" style={{ minHeight: '70vh' }}>
+                {/* Previous Button */}
+                {photoGallery.photos.length > 1 && (
+                  <button
+                    className="btn btn-dark position-absolute start-0 top-50 translate-middle-y ms-3"
+                    style={{ zIndex: 10, opacity: 0.8 }}
+                    onClick={prevPhoto}
+                    onMouseEnter={(e) => e.target.style.opacity = 1}
+                    onMouseLeave={(e) => e.target.style.opacity = 0.8}
+                  >
+                    <i className="bi bi-chevron-left fs-2 text-white"></i>
+                  </button>
+                )}
+
+                {/* Main Image */}
+                <img 
+                  src={photoGallery.photos[photoGallery.currentIndex]} 
+                  alt={`Foto ${photoGallery.currentIndex + 1}`}
+                  className="img-fluid"
+                  style={{ 
+                    maxHeight: '70vh', 
+                    maxWidth: '100%', 
+                    objectFit: 'contain'
+                  }}
+                />
+
+                {/* Next Button */}
+                {photoGallery.photos.length > 1 && (
+                  <button
+                    className="btn btn-dark position-absolute end-0 top-50 translate-middle-y me-3"
+                    style={{ zIndex: 10, opacity: 0.8 }}
+                    onClick={nextPhoto}
+                    onMouseEnter={(e) => e.target.style.opacity = 1}
+                    onMouseLeave={(e) => e.target.style.opacity = 0.8}
+                  >
+                    <i className="bi bi-chevron-right fs-2 text-white"></i>
+                  </button>
+                )}
+              </div>
+
+              {/* Thumbnail Navigation */}
+              {photoGallery.photos.length > 1 && (
+                <div className="modal-footer border-secondary justify-content-center">
+                  <div className="d-flex gap-2 flex-wrap justify-content-center" style={{ maxWidth: '100%', overflowX: 'auto' }}>
+                    {photoGallery.photos.map((photo, index) => (
+                      <button
+                        key={index}
+                        className={`btn p-0 border-2 ${index === photoGallery.currentIndex ? 'border-primary' : 'border-secondary'}`}
+                        onClick={() => goToPhoto(index)}
+                        style={{ width: '60px', height: '45px' }}
+                      >
+                        <img 
+                          src={photo} 
+                          alt={`Thumbnail ${index + 1}`}
+                          style={{ 
+                            width: '100%', 
+                            height: '100%', 
+                            objectFit: 'cover',
+                            borderRadius: '2px'
+                          }}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Keyboard Navigation Instructions */}
+              <div className="position-absolute bottom-0 start-0 m-3">
+                <small className="text-muted">
+                  <i className="bi bi-keyboard me-1"></i>
+                  {photoGallery.photos.length > 1 
+                    ? 'Panah ←→ navigasi • ESC tutup' 
+                    : 'ESC untuk tutup'
+                  }
+                </small>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };
 

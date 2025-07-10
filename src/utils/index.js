@@ -13,4 +13,14 @@ export {
   ACTIVITY_TYPES,
   TABLES 
 } from './logging';
-export { debugUser } from './debug'; 
+export { debugUser } from './debug';
+export {
+  parsePhotoUrls,
+  serializePhotoUrls,
+  getPhotoCount,
+  getFirstPhotoUrl,
+  addPhotoUrl,
+  removePhotoUrl,
+  uploadMultiplePhotos,
+  deletePhotosFromStorage
+} from './photoUtils'; 
