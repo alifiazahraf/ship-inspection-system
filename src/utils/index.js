@@ -23,4 +23,10 @@ export {
   removePhotoUrl,
   uploadMultiplePhotos,
   deletePhotosFromStorage
-} from './photoUtils'; 
+} from './photoUtils';
+export { 
+  getOptimizedImageForPDF, 
+  batchOptimizeImages, 
+  PDF_IMAGE_CONFIGS, 
+  estimateCompressedSize 
+} from './imageOptimizer'; 

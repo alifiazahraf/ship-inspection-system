@@ -10,7 +10,8 @@ const FindingTable = ({
   onDelete,
   onUploadAfter,
   onDeleteAfter,
-  onImageClick
+  onImageClick,
+  onUpdateComment
 }) => {
   const [expandedPhotoRow, setExpandedPhotoRow] = useState(null);
 
@@ -27,6 +28,111 @@ const FindingTable = ({
       </div>
     );
   }
+
+  const VesselCommentCell = ({ finding, role, onUpdateComment }) => {
+    const [isEditing, setIsEditing] = useState(false);
+    const [comment, setComment] = useState(finding.vessel_comment || '');
+    const [saving, setSaving] = useState(false);
+
+    const handleSave = async () => {
+      if (saving) return;
+      setSaving(true);
+      try {
+        await onUpdateComment(finding.id, comment);
+        setIsEditing(false);
+      } catch (error) {
+        console.error('Error saving comment:', error);
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    const handleCancel = () => {
+      setComment(finding.vessel_comment || '');
+      setIsEditing(false);
+    };
+
+    // Only users (not admin) can edit vessel comments
+    const canEdit = role === 'user';
+
+    if (!canEdit) {
+      return (
+        <div style={{ maxWidth: '200px', fontSize: '0.9rem' }}>
+          {finding.vessel_comment ? (
+            <span className="text-muted">{finding.vessel_comment}</span>
+          ) : (
+            <span className="text-muted fst-italic">Belum ada komentar</span>
+          )}
+        </div>
+      );
+    }
+
+    if (isEditing) {
+      return (
+        <div style={{ maxWidth: '200px' }}>
+          <textarea
+            className="form-control form-control-sm"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            rows="3"
+            placeholder="Tulis komentar dari kapal..."
+            disabled={saving}
+          />
+          <div className="mt-1">
+            <button
+              className="btn btn-primary btn-sm me-1"
+              onClick={handleSave}
+              disabled={saving}
+              style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+            >
+              {saving ? (
+                <>
+                  <span className="spinner-border spinner-border-sm me-1" role="status"></span>
+                  Simpan
+                </>
+              ) : (
+                'Simpan'
+              )}
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleCancel}
+              disabled={saving}
+              style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ maxWidth: '200px', fontSize: '0.9rem' }}>
+        {finding.vessel_comment ? (
+          <div>
+            <span className="text-muted">{finding.vessel_comment}</span>
+            <button
+              className="btn btn-link btn-sm p-0 ms-1"
+              onClick={() => setIsEditing(true)}
+              title="Edit komentar"
+              style={{ fontSize: '0.8rem' }}
+            >
+              <i className="bi bi-pencil"></i>
+            </button>
+          </div>
+        ) : (
+          <button
+            className="btn btn-outline-primary btn-sm"
+            onClick={() => setIsEditing(true)}
+            style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+          >
+            <i className="bi bi-plus"></i> Tambah Komentar
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const PhotoCell = ({ photoString, type, finding }) => {
     const photoCount = getPhotoCount(photoString);
@@ -143,6 +249,7 @@ const FindingTable = ({
             <th>Status</th>
             <th>Foto Before</th>
             <th>Foto After</th>
+            <th>Vessel Comment</th>
             {role === 'admin' && <th>Aksi</th>}
           </tr>
         </thead>
@@ -177,6 +284,13 @@ const FindingTable = ({
                     finding={finding}
                   />
                 </td>
+                <td>
+                  <VesselCommentCell 
+                    finding={finding}
+                    role={role}
+                    onUpdateComment={onUpdateComment}
+                  />
+                </td>
                 {role === 'admin' && (
                   <td>
                     <div className="btn-group" role="group">
@@ -202,7 +316,7 @@ const FindingTable = ({
               {/* Expanded photo gallery row */}
               {(expandedPhotoRow === `${finding.id}-before` || expandedPhotoRow === `${finding.id}-after`) && (
                 <tr className="table-light">
-                  <td colSpan={role === 'admin' ? 10 : 9}>
+                  <td colSpan={role === 'admin' ? 11 : 10}>
                     <div className="py-2">
                       {expandedPhotoRow === `${finding.id}-before` && (
                         <div>
