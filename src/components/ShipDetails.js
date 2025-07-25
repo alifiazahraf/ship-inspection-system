@@ -16,6 +16,10 @@ import {
   uploadMultiplePhotos,
   deletePhotosFromStorage 
 } from '../utils/photoUtils';
+import { 
+  getOptimizedImageForPDF,  
+  PDF_IMAGE_CONFIGS 
+} from '../utils/imageOptimizer';
 
 const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role = 'admin', user }) => {
   const [findings, setFindings] = useState([]);
@@ -30,6 +34,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   const [uploading, setUploading] = useState(false);
   const [latestInspectionDate, setLatestInspectionDate] = useState(selectedShip.last_inspection);
   const [downloadingPDF, setDownloadingPDF] = useState(false);
+  const [pdfProgress, setPdfProgress] = useState({ step: '', progress: 0 });
   const [showDeleteAfterModal, setShowDeleteAfterModal] = useState(false);
   const [findingToDeleteAfter, setFindingToDeleteAfter] = useState(null);
 
@@ -388,25 +393,56 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     }
   };
 
-  // Get base64 from image URL for PDF generation
-  const getBase64FromImageUrl = async (url) => {
+  // Handle vessel comment update
+  const handleUpdateVesselComment = async (findingId, comment) => {
     try {
-      const response = await fetch(url, { mode: 'cors' });
-      const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
+      const { error } = await supabase
+        .from('findings')
+        .update({ vessel_comment: comment })
+        .eq('id', findingId);
+
+      if (error) {
+        throw error;
+      }
+
+      toast.success('Komentar berhasil disimpan!');
+      
+      // Update local state
+      setFindings(prevFindings => 
+        prevFindings.map(finding => 
+          finding.id === findingId 
+            ? { ...finding, vessel_comment: comment }
+            : finding
+        )
+      );
+
+      // Log vessel comment activity
+      if (user) {
+        const finding = findings.find(f => f.id === findingId);
+        logFindingActivity(
+          user,
+          ACTIVITY_TYPES.UPDATE,
+          `${comment ? 'Menambah/mengedit' : 'Menghapus'} komentar kapal untuk temuan No.${finding?.no} pada kapal: ${selectedShip.ship_name}`,
+          finding,
+          selectedShip,
+          { ...finding }, // old_data
+          { ...finding, vessel_comment: comment } // new_data
+        );
+      }
     } catch (error) {
-      console.error('Error converting image to base64:', error);
-      return null;
+      console.error('Error updating vessel comment:', error);
+      throw error;
     }
+  };
+
+  // Get optimized base64 from image URL for PDF generation
+  const getOptimizedBase64FromImageUrl = async (url, config = PDF_IMAGE_CONFIGS.table) => {
+    return getOptimizedImageForPDF(url, config);
   };
 
     const handleDownloadPDF = async () => {
     setDownloadingPDF(true);
+    setPdfProgress({ step: 'Memulai...', progress: 0 });
     
     try {
       // Show optimization message
@@ -462,28 +498,32 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         { header: 'PIC Kantor', dataKey: 'pic_office' },
         { header: 'Status', dataKey: 'status' },
         { header: 'Foto Before', dataKey: 'before_photo' },
-        { header: 'Foto After', dataKey: 'after_photo' }
+        { header: 'Foto After', dataKey: 'after_photo' },
+        { header: 'Vessel Comment', dataKey: 'vessel_comment' }
       ];
 
-      // Preload all images and convert to base64
+      // Preload all images and convert to optimized base64
+      setPdfProgress({ step: 'Mengoptimasi gambar untuk tabel...', progress: 10 });
+      
       const imagePromises = [];
       findings.forEach(finding => {
         const beforeUrl = getFirstPhotoUrl(finding.before_photo);
         const afterUrl = getFirstPhotoUrl(finding.after_photo);
         
         if (beforeUrl) {
-          imagePromises.push(getBase64FromImageUrl(beforeUrl));
+          imagePromises.push(getOptimizedBase64FromImageUrl(beforeUrl, PDF_IMAGE_CONFIGS.table));
         } else {
           imagePromises.push(Promise.resolve(null));
         }
         if (afterUrl) {
-          imagePromises.push(getBase64FromImageUrl(afterUrl));
+          imagePromises.push(getOptimizedBase64FromImageUrl(afterUrl, PDF_IMAGE_CONFIGS.table));
         } else {
           imagePromises.push(Promise.resolve(null));
         }
       });
 
       const images = await Promise.all(imagePromises);
+      setPdfProgress({ step: 'Membuat tabel utama...', progress: 30 });
       
       const tableRows = findings.map((finding, index) => {
         const beforeCount = getPhotoCount(finding.before_photo);
@@ -497,6 +537,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           pic_ship: finding.pic_ship,
           pic_office: finding.pic_office,
           status: finding.status,
+          vessel_comment: finding.vessel_comment || 'Belum ada komentar',
           before_photo: beforeCount > 0 ? (beforeCount > 1 ? `${beforeCount} foto` : 'Ada') : 'Tidak Ada',
           after_photo: afterCount > 0 ? (afterCount > 1 ? `${afterCount} foto` : 'Ada') : 'Tidak Ada',
           before_image_data: images[index * 2],
@@ -528,15 +569,16 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           minCellHeight: 40
         },
         columnStyles: {
-          0: { cellWidth: 35, halign: 'center' }, // No
-          1: { cellWidth: 65, halign: 'center' }, // Date
-          2: { cellWidth: 200, halign: 'left' },  // Finding - kurangi sedikit
-          3: { cellWidth: 80, halign: 'center' }, // Category
-          4: { cellWidth: 80, halign: 'center' }, // PIC Ship
-          5: { cellWidth: 80, halign: 'center' }, // PIC Office
-          6: { cellWidth: 55, halign: 'center' }, // Status
-          7: { cellWidth: 80, halign: 'center' }, // Before Photo
-          8: { cellWidth: 80, halign: 'center' }  // After Photo
+          0: { cellWidth: 30, halign: 'center' }, // No
+          1: { cellWidth: 55, halign: 'center' }, // Date
+          2: { cellWidth: 160, halign: 'left' },  // Finding - kurangi untuk vessel comment
+          3: { cellWidth: 70, halign: 'center' }, // Category
+          4: { cellWidth: 70, halign: 'center' }, // PIC Ship
+          5: { cellWidth: 70, halign: 'center' }, // PIC Office
+          6: { cellWidth: 50, halign: 'center' }, // Status
+          7: { cellWidth: 70, halign: 'center' }, // Before Photo
+          8: { cellWidth: 70, halign: 'center' }, // After Photo
+          9: { cellWidth: 120, halign: 'left' }   // Vessel Comment
         },
         styles: {
           overflow: 'linebreak',
@@ -576,6 +618,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
 
       // Add table to PDF
       autoTable(doc, tableOptions);
+      setPdfProgress({ step: 'Tabel utama selesai...', progress: 50 });
 
       // Add Photo Detail Section for findings with multiple photos
       const findingsWithMultiplePhotos = findings.filter(finding => 
@@ -583,6 +626,8 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       );
 
       if (findingsWithMultiplePhotos.length > 0) {
+        setPdfProgress({ step: 'Mengoptimasi gambar detail...', progress: 60 });
+        
         // Add new page for photo details
         doc.addPage();
         
@@ -605,17 +650,18 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         const margin = 50;
         const maxWidth = pageWidth - (margin * 2);
 
-        // Preload all photos for detail section
+        // Preload all photos for detail section with optimization
         const detailImagePromises = [];
         findingsWithMultiplePhotos.forEach(finding => {
           const beforeUrls = parsePhotoUrls(finding.before_photo);
           const afterUrls = parsePhotoUrls(finding.after_photo);
           
-          beforeUrls.forEach(url => detailImagePromises.push(getBase64FromImageUrl(url)));
-          afterUrls.forEach(url => detailImagePromises.push(getBase64FromImageUrl(url)));
+          beforeUrls.forEach(url => detailImagePromises.push(getOptimizedBase64FromImageUrl(url, PDF_IMAGE_CONFIGS.detail)));
+          afterUrls.forEach(url => detailImagePromises.push(getOptimizedBase64FromImageUrl(url, PDF_IMAGE_CONFIGS.detail)));
         });
 
         const detailImages = await Promise.all(detailImagePromises);
+        setPdfProgress({ step: 'Menyusun halaman detail...', progress: 80 });
         let imageIndex = 0;
 
         for (const finding of findingsWithMultiplePhotos) {
@@ -770,8 +816,11 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       const fileName = `Laporan_Temuan_${selectedShip.ship_name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
       
       // Save the PDF
+      setPdfProgress({ step: 'Menyimpan PDF...', progress: 95 });
       doc.save(fileName);
-      toast.success('PDF berhasil didownload!');
+      
+      setPdfProgress({ step: 'PDF berhasil dibuat!', progress: 100 });
+      toast.success('PDF berhasil diunduh! (Ukuran file dioptimasi)');
       
       // Log PDF download activity
       if (user) {
@@ -785,12 +834,122 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     } catch (error) {
       console.error('Error generating PDF:', error);
       toast.error('Terjadi kesalahan saat membuat PDF');
+      setPdfProgress({ step: 'Error!', progress: 0 });
     } finally {
-      setDownloadingPDF(false);
+      setTimeout(() => {
+        setDownloadingPDF(false);
+        setPdfProgress({ step: '', progress: 0 });
+      }, 1000);
     }
   };
 
   // Photo display components
+  const VesselCommentCell = ({ finding, role, onUpdateComment }) => {
+    const [isEditing, setIsEditing] = useState(false);
+    const [comment, setComment] = useState(finding.vessel_comment || '');
+    const [saving, setSaving] = useState(false);
+
+    const handleSave = async () => {
+      if (saving) return;
+      setSaving(true);
+      try {
+        await onUpdateComment(finding.id, comment);
+        setIsEditing(false);
+      } catch (error) {
+        console.error('Error saving comment:', error);
+        toast.error('Gagal menyimpan komentar');
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    const handleCancel = () => {
+      setComment(finding.vessel_comment || '');
+      setIsEditing(false);
+    };
+
+    // Only users (not admin) can edit vessel comments
+    const canEdit = role === 'user';
+
+    if (!canEdit) {
+      return (
+        <div style={{ maxWidth: '200px', fontSize: '0.9rem' }}>
+          {finding.vessel_comment ? (
+            <span className="text-muted">{finding.vessel_comment}</span>
+          ) : (
+            <span className="text-muted fst-italic">Belum ada komentar</span>
+          )}
+        </div>
+      );
+    }
+
+    if (isEditing) {
+      return (
+        <div style={{ maxWidth: '200px' }}>
+          <textarea
+            className="form-control form-control-sm"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            rows="3"
+            placeholder="Tulis komentar dari kapal..."
+            disabled={saving}
+          />
+          <div className="mt-1">
+            <button
+              className="btn btn-primary btn-sm me-1"
+              onClick={handleSave}
+              disabled={saving}
+              style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+            >
+              {saving ? (
+                <>
+                  <span className="spinner-border spinner-border-sm me-1" role="status"></span>
+                  Simpan
+                </>
+              ) : (
+                'Simpan'
+              )}
+            </button>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleCancel}
+              disabled={saving}
+              style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+            >
+              Batal
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ maxWidth: '200px', fontSize: '0.9rem' }}>
+        {finding.vessel_comment ? (
+          <div>
+            <span className="text-muted">{finding.vessel_comment}</span>
+            <button
+              className="btn btn-link btn-sm p-0 ms-1"
+              onClick={() => setIsEditing(true)}
+              title="Edit komentar"
+              style={{ fontSize: '0.8rem' }}
+            >
+              <i className="bi bi-pencil"></i>
+            </button>
+          </div>
+        ) : (
+          <button
+            className="btn btn-outline-primary btn-sm"
+            onClick={() => setIsEditing(true)}
+            style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem' }}
+          >
+            <i className="bi bi-plus"></i> Tambah Komentar
+          </button>
+        )}
+      </div>
+    );
+  };
+
   const PhotoCell = ({ photoString, type, finding }) => {
     const photoCount = getPhotoCount(photoString);
     const firstPhotoUrl = getFirstPhotoUrl(photoString);
@@ -923,32 +1082,40 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         </div>
         <div>
           {role === 'admin' && (
-            <>
+            <button 
+              className="btn btn-success me-2" 
+              onClick={() => setShowAddForm(true)}
+              disabled={loading}
+            >
+              <i className="bi bi-plus-lg me-2"></i>Tambah Temuan
+            </button>
+          )}
           <button 
-                className="btn btn-success me-2" 
-                onClick={() => setShowAddForm(true)}
-                disabled={loading}
-          >
-                <i className="bi bi-plus-lg me-2"></i>Tambah Temuan
-          </button>
-          <button 
-                className="btn btn-info me-2" 
+            className="btn btn-info me-2" 
             onClick={handleDownloadPDF}
-                disabled={loading || downloadingPDF}
+            disabled={loading || downloadingPDF}
           >
             {downloadingPDF ? (
               <>
-                    <span className="spinner-border spinner-border-sm me-2" role="status"></span>
-                Membuat PDF...
+                <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                <div className="d-flex flex-column align-items-start">
+                  <small>{pdfProgress.step}</small>
+                  {pdfProgress.progress > 0 && (
+                    <div className="progress" style={{ width: '100px', height: '4px' }}>
+                      <div 
+                        className="progress-bar" 
+                        style={{ width: `${pdfProgress.progress}%` }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
               </>
             ) : (
               <>
-                    <i className="bi bi-file-earmark-pdf me-2"></i>Download PDF
+                <i className="bi bi-file-earmark-pdf me-2"></i>Download PDF
               </>
             )}
           </button>
-            </>
-          )}
         </div>
       </div>
 
@@ -1003,6 +1170,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                     <th scope="col">Status</th>
                     <th scope="col">Foto Before</th>
                     <th scope="col">Foto After</th>
+                    <th scope="col">Vessel Comment</th>
                     {role === 'admin' && <th scope="col" className="text-center">Action</th>}
                   </tr>
                 </thead>
@@ -1035,6 +1203,13 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                               type="after" 
                               finding={finding}
                             />
+                        </td>
+                        <td>
+                          <VesselCommentCell 
+                            finding={finding}
+                            role={role}
+                            onUpdateComment={handleUpdateVesselComment}
+                          />
                         </td>
                         {role === 'admin' && (
                           <td className="text-center">
