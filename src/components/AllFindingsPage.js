@@ -482,19 +482,11 @@ const AllFindingsPage = ({ user, handleLogout }) => {
                                <small className="text-muted">{finding.ships?.ship_code}</small>
                              </div>
                            </td>
-                           <td>
-                             <div 
-                               style={{ 
-                                 maxWidth: '250px',
-                                 overflow: 'hidden',
-                                 textOverflow: 'ellipsis',
-                                 whiteSpace: 'nowrap'
-                               }}
-                               title={finding.finding}
-                             >
-                               {finding.finding}
-                             </div>
-                           </td>
+                                                       <td>
+                              <div style={{ maxWidth: '250px', wordWrap: 'break-word' }}>
+                                {finding.finding}
+                              </div>
+                            </td>
                            <td>
                              <span className="badge bg-secondary">
                                {finding.category}
@@ -549,21 +541,13 @@ const AllFindingsPage = ({ user, handleLogout }) => {
                                findingId={finding.id}
                              />
                            </td>
-                           <td>
-                             <div 
-                               style={{ 
-                                 maxWidth: '200px',
-                                 overflow: 'hidden',
-                                 textOverflow: 'ellipsis',
-                                 whiteSpace: 'nowrap'
-                               }}
-                               title={finding.vessel_comment}
-                             >
-                               {finding.vessel_comment || (
-                                 <span className="text-muted fst-italic">Belum ada komentar</span>
-                               )}
-                             </div>
-                           </td>
+                                                       <td>
+                              <div style={{ maxWidth: '200px', wordWrap: 'break-word' }}>
+                                {finding.vessel_comment || (
+                                  <span className="text-muted fst-italic">Belum ada komentar</span>
+                                )}
+                              </div>
+                            </td>
                          </tr>
                        ))}
                     </tbody>
