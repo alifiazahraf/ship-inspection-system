@@ -4,6 +4,7 @@ import { supabase } from './supabaseClient';
 import LoginForm from './components/LoginForm';
 import Dashboard from './components/Dashboard';
 import RegisterForm from './components/RegisterForm';
+import AllFindingsPage from './components/AllFindingsPage';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap-icons/font/bootstrap-icons.css';
 import 'react-toastify/dist/ReactToastify.css';
@@ -54,6 +55,22 @@ function App() {
           path="/dashboard"
           element={
             user ? <Dashboard user={user} /> : <Navigate to="/login" replace />
+          }
+        />
+        <Route
+          path="/daftar-temuan"
+          element={
+            user && user?.user_metadata?.role === 'admin' ? (
+              <AllFindingsPage 
+                user={user} 
+                handleLogout={async () => {
+                  await supabase.auth.signOut();
+                  window.location.reload();
+                }}
+              />
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
           }
         />
         <Route path="/register" element={<RegisterForm />} />

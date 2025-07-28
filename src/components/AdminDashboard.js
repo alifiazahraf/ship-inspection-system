@@ -359,6 +359,14 @@ const AdminDashboard = ({ user, handleLogout }) => {
                 </div>
                 <div className="d-flex gap-2">
                   <button
+                    className="btn btn-success d-flex align-items-center"
+                    onClick={() => window.location.href = '/daftar-temuan'}
+                    disabled={loading}
+                  >
+                    <i className="bi bi-list-ul me-2"></i>
+                    Daftar Temuan
+                  </button>
+                  <button
                     className="btn btn-info d-flex align-items-center"
                     onClick={() => setShowActivityLogs(true)}
                     disabled={loading}
