@@ -6,6 +6,7 @@ import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 import { logFindingActivity, logShipActivity, ACTIVITY_TYPES } from '../utils/logging';
 import { debugUser } from '../utils/debug';
 import { 
@@ -35,8 +36,15 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   const [latestInspectionDate, setLatestInspectionDate] = useState(selectedShip.last_inspection);
   const [downloadingPDF, setDownloadingPDF] = useState(false);
   const [pdfProgress, setPdfProgress] = useState({ step: '', progress: 0 });
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
+  const [excelProgress, setExcelProgress] = useState({ step: '', progress: 0 });
   const [showDeleteAfterModal, setShowDeleteAfterModal] = useState(false);
   const [findingToDeleteAfter, setFindingToDeleteAfter] = useState(null);
+  const [deleteFindingConfirmation, setDeleteFindingConfirmation] = useState({
+    isOpen: false,
+    finding: null,
+    deleting: false
+  });
 
   
   // Photo gallery modal state
@@ -121,6 +129,12 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   }, [photoGallery.isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchShipData = async () => {
+    if (!selectedShip || !selectedShip.id) {
+      setLoading(false);
+      setLoadingUser(false);
+      return;
+    }
+
     setLoading(true);
     setLoadingUser(true);
 
@@ -172,9 +186,11 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   };
 
   useEffect(() => {
-    fetchShipData();
-    // eslint-disable-next-line
-  }, [selectedShip.id]);
+    if (selectedShip?.id) {
+      fetchShipData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedShip?.id]);
   
   const handleFindingAdded = async () => {
     setShowAddForm(false);
@@ -272,75 +288,73 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     }
   };
 
-  const handleDeleteFinding = async (finding) => {
-    // Create custom confirm dialog
-    toast.warn(
-      <div className="text-center">
-        <p className="mb-3">Apakah Anda yakin ingin menghapus temuan ini?</p>
-        <div className="d-flex justify-content-center gap-1">
-          <button 
-            className="btn btn-sm btn-secondary" 
-            onClick={() => toast.dismiss()}
-          >
-            Batal
-          </button>
-          <button
-            className="btn btn-sm btn-danger"
-            onClick={async () => {
-              try {
-                // Delete photos from storage
-                const beforePhotoUrls = parsePhotoUrls(finding.before_photo);
-                const afterPhotoUrls = parsePhotoUrls(finding.after_photo);
-                const allPhotoUrls = [...beforePhotoUrls, ...afterPhotoUrls];
-                
-                if (allPhotoUrls.length > 0) {
-                  await deletePhotosFromStorage(allPhotoUrls, supabase);
-                }
+  const handleDeleteFinding = (finding) => {
+    setDeleteFindingConfirmation({
+      isOpen: true,
+      finding: finding,
+      deleting: false
+    });
+  };
 
-                const { error } = await supabase
-                  .from('findings')
-                  .delete()
-                  .eq('id', finding.id);
-
-                if (error) {
-                  toast.error('Gagal menghapus temuan: ' + error.message);
-                } else {
-                  toast.success('Temuan berhasil dihapus!');
-                  await fetchShipData();
-                  
-                  // Log finding deletion activity
-                  if (user) {
-                    debugUser(user, 'handleDeleteFinding');
-                    
-                    logFindingActivity(
-                      user,
-                      ACTIVITY_TYPES.DELETE,
-                      `Menghapus temuan No.${finding.no} pada kapal: ${selectedShip.ship_name}`,
-                      finding,
-                      selectedShip
-                    );
-                  }
-                }
-              } catch (error) {
-                console.error('Error deleting finding:', error);
-                toast.error('Terjadi kesalahan saat menghapus temuan');
-              }
-              toast.dismiss();
-            }}
-          >
-            Hapus
-          </button>
-        </div>
-      </div>,
-      {
-        position: "top-center",
-        autoClose: false,
-        hideProgressBar: true,
-        closeOnClick: false,
-        pauseOnHover: true,
-        draggable: false,
+  const confirmDeleteFinding = async () => {
+    if (!deleteFindingConfirmation.finding) return;
+    
+    setDeleteFindingConfirmation(prev => ({ ...prev, deleting: true }));
+    
+    try {
+      const finding = deleteFindingConfirmation.finding;
+      
+      // Delete photos from storage
+      const beforePhotoUrls = parsePhotoUrls(finding.before_photo);
+      const afterPhotoUrls = parsePhotoUrls(finding.after_photo);
+      const allPhotoUrls = [...beforePhotoUrls, ...afterPhotoUrls];
+      
+      if (allPhotoUrls.length > 0) {
+        await deletePhotosFromStorage(allPhotoUrls, supabase);
       }
-    );
+
+      const { error } = await supabase
+        .from('findings')
+        .delete()
+        .eq('id', finding.id);
+
+      if (error) {
+        toast.error('Gagal menghapus temuan: ' + error.message);
+      } else {
+        toast.success('Temuan berhasil dihapus!');
+        await fetchShipData();
+        
+        // Log finding deletion activity
+        if (user) {
+          debugUser(user, 'handleDeleteFinding');
+          
+          logFindingActivity(
+            user,
+            ACTIVITY_TYPES.DELETE,
+            `Menghapus temuan No.${finding.no} pada kapal: ${selectedShip.ship_name}`,
+            finding,
+            selectedShip
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error deleting finding:', error);
+      toast.error('Terjadi kesalahan saat menghapus temuan');
+    } finally {
+      setDeleteFindingConfirmation({
+        isOpen: false,
+        finding: null,
+        deleting: false
+      });
+    }
+  };
+
+  const cancelDeleteFinding = () => {
+    setDeleteFindingConfirmation({
+      isOpen: false,
+      finding: null,
+      deleting: false
+    });
   };
 
   const handleDeleteAfterPhoto = (finding) => {
@@ -843,6 +857,202 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     }
   };
 
+  const handleDownloadExcel = async () => {
+    setDownloadingExcel(true);
+    setExcelProgress({ step: 'Memulai...', progress: 0 });
+    
+    try {
+      // Show processing message
+      toast.info('Menyiapkan data Excel, mohon tunggu...', {
+        position: "top-center",
+        autoClose: 2000
+      });
+
+      setExcelProgress({ step: 'Menyiapkan data dengan format baru...', progress: 25 });
+
+      // Prepare data following the requested survey format
+      const currentYear = new Date().getFullYear();
+      const shipTitle = selectedShip.ship_name ? selectedShip.ship_name.toUpperCase() : 'KAPAL';
+      const sheetData = [
+        [`SURVEI RUTIN - ${currentYear}`, '', '', '', '', '', '', ''],
+        ['', '', '', '', '', '', '', ''],
+        ['NO', 'Tanggal', `MV. ${shipTitle}`, 'PIC', '', 'KATEGORI', 'STATUS', 'COMMENT'],
+        ['', '', '', "Vessel's", 'Office', '', '', '']
+      ];
+
+      findings.forEach((finding) => {
+        sheetData.push([
+          finding.no ?? '',
+          finding.date ? new Date(finding.date).toLocaleDateString('id-ID') : '', // Tanggal
+          finding.finding || '',
+          finding.pic_ship || '',
+          finding.pic_office || '',
+          finding.category || '',
+          finding.status || '',
+          finding.vessel_comment || ''
+        ]);
+      });
+
+      setExcelProgress({ step: 'Membuat workbook...', progress: 45 });
+
+      // Create workbook and worksheet with custom layout
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+      // Define merges to match the survey layout
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, // Title row (8 columns)
+        { s: { r: 2, c: 0 }, e: { r: 3, c: 0 } }, // NO header merge
+        { s: { r: 2, c: 1 }, e: { r: 3, c: 1 } }, // Tanggal header merge
+        { s: { r: 2, c: 2 }, e: { r: 3, c: 2 } }, // MV header merge
+        { s: { r: 2, c: 3 }, e: { r: 2, c: 4 } }, // PIC merge
+        { s: { r: 2, c: 5 }, e: { r: 3, c: 5 } }, // KATEGORI merge
+        { s: { r: 2, c: 6 }, e: { r: 3, c: 6 } }, // STATUS merge
+        { s: { r: 2, c: 7 }, e: { r: 3, c: 7 } }  // COMMENT merge
+      ];
+
+      // Set column widths to resemble the reference table
+      ws['!cols'] = [
+        { wch: 6 },   // NO
+        { wch: 12 },  // Tanggal
+        { wch: 55 },  // Finding description
+        { wch: 14 },  // PIC Vessel
+        { wch: 18 },  // PIC Office
+        { wch: 12 },  // Kategori
+        { wch: 12 },  // Status
+        { wch: 28 }   // Comment
+      ];
+
+      const borderStyle = { style: 'thin', color: { rgb: '000000' } };
+      const headerFill = { fgColor: { rgb: 'FFF2B2' } };
+      const titleStyle = {
+        font: { bold: true, sz: 18, color: { rgb: '000000' } },
+        alignment: { horizontal: 'center', vertical: 'center' }
+      };
+      const headerStyle = {
+        font: { bold: true, color: { rgb: '000000' } },
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        fill: headerFill,
+        border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle }
+      };
+      const subHeaderStyle = {
+        font: { bold: true, color: { rgb: '000000' } },
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        fill: { fgColor: { rgb: 'FFE699' } },
+        border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle }
+      };
+      const centerCellStyle = {
+        alignment: { horizontal: 'center', vertical: 'top', wrapText: true },
+        border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle }
+      };
+      const leftCellStyle = {
+        alignment: { horizontal: 'left', vertical: 'top', wrapText: true },
+        border: { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle }
+      };
+
+      const ensureCell = (address) => {
+        if (!ws[address]) {
+          ws[address] = { t: 's', v: '' };
+        }
+      };
+
+      ensureCell('A1');
+      ws['A1'].s = titleStyle;
+
+      ['A3', 'B3', 'C3', 'D3', 'F3', 'G3', 'H3'].forEach((address) => {
+        ensureCell(address);
+        ws[address].s = headerStyle;
+      });
+      ['D4', 'E4'].forEach((address) => {
+        ensureCell(address);
+        ws[address].s = subHeaderStyle;
+      });
+
+      // Apply border and alignment styles to the header merged cells' bottom row
+      ['A4', 'B4', 'C4', 'F4', 'G4', 'H4'].forEach((address) => {
+        ensureCell(address);
+        ws[address].s = headerStyle;
+      });
+
+      // Style data rows
+      const dataStartRow = 4;
+      for (let r = dataStartRow; r < sheetData.length; r++) {
+        for (let c = 0; c < 8; c++) {
+          const cellAddress = XLSX.utils.encode_cell({ r, c });
+          ensureCell(cellAddress);
+          if (c === 2 || c === 7) {
+            ws[cellAddress].s = leftCellStyle;
+          } else {
+            ws[cellAddress].s = centerCellStyle;
+          }
+        }
+      }
+
+      setExcelProgress({ step: 'Menambahkan informasi kapal...', progress: 70 });
+
+      // Additional ship information worksheet
+      const shipInfoData = [
+        ['Nama Kapal', selectedShip.ship_name],
+        ['Kode Kapal', selectedShip.ship_code],
+        ['Inspeksi Terakhir', latestInspectionDate ? new Date(latestInspectionDate).toLocaleDateString('id-ID') : 'Belum ada'],
+        ['Total Temuan', findings.length],
+        ['Tanggal Cetak', new Date().toLocaleDateString('id-ID')],
+        ['User di-assign', assignedUser ? assignedUser.email : 'Belum di-assign']
+      ];
+      const shipInfoWs = XLSX.utils.aoa_to_sheet(shipInfoData);
+      shipInfoWs['!cols'] = [{ wch: 20 }, { wch: 30 }];
+
+      // Apply simple styling for the ship information sheet
+      const infoBorder = { top: borderStyle, bottom: borderStyle, left: borderStyle, right: borderStyle };
+      for (let r = 0; r < shipInfoData.length; r++) {
+        for (let c = 0; c < shipInfoData[r].length; c++) {
+          const cellAddress = XLSX.utils.encode_cell({ r, c });
+          if (!shipInfoWs[cellAddress]) {
+            shipInfoWs[cellAddress] = { t: 's', v: '' };
+          }
+          shipInfoWs[cellAddress].s = {
+            font: { bold: c === 0 },
+            alignment: { horizontal: c === 0 ? 'left' : 'left', vertical: 'center' },
+            border: infoBorder
+          };
+        }
+      }
+
+      XLSX.utils.book_append_sheet(wb, ws, 'SURVEI RUTIN');
+      XLSX.utils.book_append_sheet(wb, shipInfoWs, 'Informasi Kapal');
+
+      setExcelProgress({ step: 'Menyimpan file...', progress: 90 });
+
+      // Generate filename
+      const fileName = `Laporan_Temuan_${selectedShip.ship_name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      // Save the Excel file
+      XLSX.writeFile(wb, fileName);
+      
+      setExcelProgress({ step: 'Excel berhasil dibuat!', progress: 100 });
+      toast.success('File Excel berhasil diunduh!');
+      
+      // Log Excel download activity
+      if (user) {
+        logShipActivity(
+          user,
+          ACTIVITY_TYPES.DOWNLOAD,
+          `Download laporan Excel kapal: ${selectedShip.ship_name} (${findings.length} temuan)`,
+          selectedShip
+        );
+      }
+    } catch (error) {
+      console.error('Error generating Excel:', error);
+      toast.error('Terjadi kesalahan saat membuat Excel');
+      setExcelProgress({ step: 'Error!', progress: 0 });
+    } finally {
+      setTimeout(() => {
+        setDownloadingExcel(false);
+        setExcelProgress({ step: '', progress: 0 });
+      }, 1000);
+    }
+  };
+
   // Photo display components
   const VesselCommentCell = ({ finding, role, onUpdateComment }) => {
     const [isEditing, setIsEditing] = useState(false);
@@ -1072,39 +1282,116 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
 
 
   return (
-    <div className="container-fluid mt-4">
+    <div className="container-fluid px-4 py-4" style={{ 
+      maxWidth: '1600px', 
+      backgroundColor: '#f0f4f8',
+      backgroundImage: 'linear-gradient(to bottom, rgba(30, 58, 138, 0.02) 0%, rgba(30, 64, 175, 0.01) 100%)'
+    }}>
+      {/* Header Section */}
       <div className="d-flex justify-content-between align-items-center mb-4">
-        <div className="d-flex align-items-center">
-          <button className="btn btn-outline-secondary me-3" onClick={onBack}>
-            <i className="bi bi-arrow-left me-2"></i>Kembali
+        <div className="d-flex align-items-center gap-3">
+          <button 
+            className="btn d-flex align-items-center justify-content-center"
+            onClick={onBack}
+            style={{ 
+              width: '44px', 
+              height: '44px',
+              borderRadius: '10px',
+              background: 'white',
+              border: '1px solid #e2e8f0',
+              color: '#64748b',
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = '#f8fafc';
+              e.target.style.borderColor = '#cbd5e1';
+              e.target.style.color = '#475569';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = 'white';
+              e.target.style.borderColor = '#e2e8f0';
+              e.target.style.color = '#64748b';
+            }}
+          >
+            <i className="bi bi-arrow-left fs-6"></i>
           </button>
-          <h2 className="d-inline">Detail Kapal: {selectedShip.ship_name}</h2>
-        </div>
         <div>
+            <h2 className="mb-1" style={{ fontSize: '1.5rem', fontWeight: '700', color: '#0f172a' }}>
+              Detail Kapal: {selectedShip.ship_name}
+            </h2>
+            <p className="text-muted mb-0" style={{ fontSize: '0.875rem' }}>Kelola temuan inspeksi kapal</p>
+          </div>
+        </div>
+        <div className="d-flex gap-2 flex-wrap">
           {role === 'admin' && (
             <button 
-              className="btn btn-success me-2" 
+                    className="btn d-flex align-items-center gap-2"
               onClick={() => setShowAddForm(true)}
               disabled={loading}
-            >
-              <i className="bi bi-plus-lg me-2"></i>Tambah Temuan
+                    style={{
+                      background: '#1e3a8a',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '0.5rem 1rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!loading) {
+                        e.target.style.background = '#1e40af';
+                        e.target.style.transform = 'translateY(-1px)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!loading) {
+                        e.target.style.background = '#1e3a8a';
+                        e.target.style.transform = 'translateY(0)';
+                      }
+                    }}
+                  >
+                    <i className="bi bi-plus-lg"></i>
+                    <span>Tambah Temuan</span>
             </button>
           )}
           <button 
-            className="btn btn-info me-2" 
+                  className="btn d-flex align-items-center gap-2"
             onClick={handleDownloadPDF}
             disabled={loading || downloadingPDF}
+                  style={{
+                    background: 'white',
+                    color: '#1e40af',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: '8px',
+                    padding: '0.5rem 1rem',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!loading && !downloadingPDF) {
+                      e.target.style.background = '#eff6ff';
+                      e.target.style.borderColor = '#1e40af';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!loading && !downloadingPDF) {
+                      e.target.style.background = 'white';
+                      e.target.style.borderColor = '#bfdbfe';
+                    }
+                  }}
           >
             {downloadingPDF ? (
               <>
-                <span className="spinner-border spinner-border-sm me-2" role="status"></span>
-                <div className="d-flex flex-column align-items-start">
-                  <small>{pdfProgress.step}</small>
+                      <span className="spinner-border spinner-border-sm" role="status" style={{ width: '0.875rem', height: '0.875rem' }}></span>
+                      <div className="d-flex flex-column align-items-start ms-2">
+                        <small style={{ fontSize: '0.7rem', lineHeight: '1.2' }}>{pdfProgress.step}</small>
                   {pdfProgress.progress > 0 && (
-                    <div className="progress" style={{ width: '100px', height: '4px' }}>
+                          <div className="progress mt-1" style={{ width: '60px', height: '2px', backgroundColor: 'rgba(30, 64, 175, 0.2)' }}>
                       <div 
                         className="progress-bar" 
-                        style={{ width: `${pdfProgress.progress}%` }}
+                              style={{ width: `${pdfProgress.progress}%`, backgroundColor: '#1e40af' }}
                       ></div>
                     </div>
                   )}
@@ -1112,32 +1399,111 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
               </>
             ) : (
               <>
-                <i className="bi bi-file-earmark-pdf me-2"></i>Download PDF
+                      <i className="bi bi-file-earmark-pdf"></i>
+                      <span>Download PDF</span>
+              </>
+            )}
+          </button>
+          <button 
+                  className="btn d-flex align-items-center gap-2"
+            onClick={handleDownloadExcel}
+            disabled={loading || downloadingExcel}
+                  style={{
+                    background: '#1e40af',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '0.5rem 1rem',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!loading && !downloadingExcel) {
+                      e.target.style.background = '#1e3a8a';
+                      e.target.style.transform = 'translateY(-1px)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!loading && !downloadingExcel) {
+                      e.target.style.background = '#1e40af';
+                      e.target.style.transform = 'translateY(0)';
+                    }
+                  }}
+          >
+            {downloadingExcel ? (
+              <>
+                <span className="spinner-border spinner-border-sm" role="status" style={{ width: '0.875rem', height: '0.875rem' }}></span>
+                <div className="d-flex flex-column align-items-start ms-2">
+                  <small style={{ fontSize: '0.7rem', lineHeight: '1.2' }}>{excelProgress.step}</small>
+                  {excelProgress.progress > 0 && (
+                    <div className="progress mt-1" style={{ width: '60px', height: '2px', backgroundColor: 'rgba(255, 255, 255, 0.3)' }}>
+                      <div 
+                        className="progress-bar bg-white" 
+                        style={{ width: `${excelProgress.progress}%` }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <i className="bi bi-file-earmark-excel"></i>
+                <span>Download Excel</span>
               </>
             )}
           </button>
         </div>
       </div>
 
-      <div className="card mb-4" style={{ border: '1px solid #dee2e6', padding: '24px' }}>
-        <div className="card-body p-0">
-          <div className="row">
-            <h4 className="mb-3">{selectedShip.ship_name}</h4>
-            <div className="col-md-2">
-              <h6 className="text-muted">Kode Kapal</h6>
-              <p className="fw-bold fs-5 mb-0">{selectedShip.ship_code}</p>
+      {/* Ship Info Card */}
+      <div className="mb-4" style={{
+        background: 'white',
+        borderRadius: '12px',
+        padding: '1.5rem',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+        border: '1px solid #e2e8f0'
+      }}>
+        <h4 className="mb-4" style={{ fontSize: '1.25rem', fontWeight: '700', color: '#0f172a' }}>
+          {selectedShip.ship_name}
+        </h4>
+        <div className="row g-4">
+          <div className="col-md-3">
+            <div>
+              <h6 className="mb-2" style={{ fontSize: '0.75rem', fontWeight: '500', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Kode Kapal
+              </h6>
+              <p className="mb-0" style={{ fontSize: '1.125rem', fontWeight: '600', color: '#1e40af' }}>
+                {selectedShip.ship_code}
+              </p>
             </div>
-            <div className="col-md-2">
-              <h6 className="text-muted">Inspeksi Terakhir</h6>
-              <p className="fw-bold fs-5 mb-0">{new Date(latestInspectionDate).toLocaleDateString()}</p>
             </div>
-            <div className="col-md-2">
-              <h6 className="text-muted">Total Temuan</h6>
-              <p className="fw-bold fs-5 mb-0">{loading ? '...' : `${findings.length}`}</p>
+          <div className="col-md-3">
+            <div>
+              <h6 className="mb-2" style={{ fontSize: '0.75rem', fontWeight: '500', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Inspeksi Terakhir
+              </h6>
+              <p className="mb-0" style={{ fontSize: '1.125rem', fontWeight: '600', color: '#0f172a' }}>
+                {latestInspectionDate ? new Date(latestInspectionDate).toLocaleDateString() : 'Belum ada'}
+              </p>
             </div>
-            <div className="col-md-5">
-              <h6 className="text-muted">User di-assign</h6>
-              <p className="fw-bold fs-5 mb-0">
+          </div>
+          <div className="col-md-3">
+            <div>
+              <h6 className="mb-2" style={{ fontSize: '0.75rem', fontWeight: '500', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Total Temuan
+              </h6>
+              <p className="mb-0" style={{ fontSize: '1.125rem', fontWeight: '600', color: '#0f172a' }}>
+                {loading ? '...' : `${findings.length}`}
+              </p>
+            </div>
+          </div>
+          <div className="col-md-3">
+            <div>
+              <h6 className="mb-2" style={{ fontSize: '0.75rem', fontWeight: '500', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                User di-assign
+              </h6>
+              <p className="mb-0" style={{ fontSize: '1.125rem', fontWeight: '600', color: '#0f172a' }}>
                 {loadingUser ? '...' : (assignedUser ? assignedUser.email : 'Belum di-assign')}
               </p>
             </div>
@@ -1145,66 +1511,205 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         </div>
       </div>
 
-      <div className="card" style={{ border: '1px solid #dee2e6', padding: '24px' }}>
-        <div className="card-header bg-white py-3">
-          <h5 className="mb-0">Daftar Temuan</h5>
+      {/* Findings Table */}
+      <div className="card" style={{
+        border: 'none',
+        borderRadius: '12px',
+        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)',
+      }}>
+        <div className="card-header" style={{
+          background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+          borderBottom: '2px solid #bfdbfe',
+          borderRadius: '12px 12px 0 0',
+          padding: '1rem 1.5rem',
+        }}>
+          <h6 className="mb-0 fw-semibold" style={{ color: '#1e40af' }}>
+            <i className="bi bi-list-ul me-2"></i>
+            Daftar Temuan ({findings.length} temuan)
+          </h6>
         </div>
-        <div className="card-body p-0 bg-white">
+        <div className="card-body p-0">
           {loading ? (
             <div className="text-center py-5">
-              <div className="spinner-border text-primary" role="status">
+              <div className="spinner-border" role="status" style={{ color: '#1e40af' }}>
                 <span className="visually-hidden">Loading...</span>
               </div>
+              <p className="mt-3 text-muted" style={{ fontSize: '0.875rem' }}>Memuat data temuan...</p>
             </div>
           ) : (
             <div className="table-responsive">
-              <table className="table align-middle mb-0">
-                <thead className="bg-light">
+              <table className="table mb-0" style={{ margin: 0 }}>
+                <thead style={{ 
+                  background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+                  borderBottom: '2px solid #bfdbfe',
+                  verticalAlign: 'middle',
+                }}>
                   <tr>
-                    <th scope="col" className="text-center">No</th>
-                    <th scope="col">Date</th>
-                    <th scope="col">Finding</th>
-                    <th scope="col">Category</th>
-                    <th scope="col">PIC Kapal</th>
-                    <th scope="col">PIC Kantor</th>
-                    <th scope="col">Status</th>
-                    <th scope="col">Foto Before</th>
-                    <th scope="col">Foto After</th>
-                    <th scope="col">Vessel Comment</th>
-                    {role === 'admin' && <th scope="col" className="text-center">Action</th>}
+                    <th scope="col" className="text-center" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>No</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>Date</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>Finding</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>Category</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>PIC Kapal</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>PIC Kantor</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>Status</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>Foto Before</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>Foto After</th>
+                    <th scope="col" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>Vessel Comment</th>
+                    {role === 'admin' && <th scope="col" className="text-center" style={{ 
+                      padding: '1rem 0.75rem',
+                      fontSize: '0.875rem',
+                      fontWeight: '600',
+                      color: '#1e40af',
+                      borderBottom: 'none',
+                    }}>Action</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {findings.length > 0 ? (
                     findings.map((finding) => (
                       <React.Fragment key={finding.id}>
-                        <tr>
-                        <td className="text-center"><span className="badge bg-primary rounded-pill">{finding.no}</span></td>
-                        <td>{new Date(finding.date).toLocaleDateString()}</td>
-                        <td className="fw-medium">{finding.finding}</td>
-                        <td>{finding.category}</td>
-                        <td>{finding.pic_ship}</td>
-                        <td>{finding.pic_office}</td>
-                        <td>
-                          <span className={`badge ${ finding.status === 'Open' ? 'bg-danger' : 'bg-success' }`}>
+                        <tr style={{
+                          borderBottom: '1px solid #f1f5f9',
+                          transition: 'all 0.2s',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#f8fafc';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        >
+                          <td className="text-center" style={{ padding: '1rem 0.75rem' }}>
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '28px',
+                              height: '28px',
+                              borderRadius: '50%',
+                              background: 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)',
+                              color: 'white',
+                              fontSize: '0.75rem',
+                              fontWeight: '600'
+                            }}>
+                              {finding.no}
+                            </span>
+                          </td>
+                          <td style={{ padding: '1rem 0.75rem', fontSize: '0.875rem', color: '#475569' }}>
+                            {new Date(finding.date).toLocaleDateString()}
+                          </td>
+                          <td style={{ padding: '1rem 0.75rem', fontSize: '0.875rem', fontWeight: '500', color: '#334155' }}>
+                            {finding.finding}
+                          </td>
+                          <td style={{ padding: '1rem 0.75rem' }}>
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '0.25rem 0.75rem',
+                              borderRadius: '6px',
+                              fontSize: '0.75rem',
+                              fontWeight: '500',
+                              background: '#f1f5f9',
+                              color: '#475569',
+                              border: '1px solid #e2e8f0'
+                            }}>
+                              {finding.category}
+                            </span>
+                          </td>
+                          <td style={{ padding: '1rem 0.75rem', fontSize: '0.875rem', color: '#334155' }}>
+                            {finding.pic_ship || <span style={{ color: '#94a3b8' }}>-</span>}
+                          </td>
+                          <td style={{ padding: '1rem 0.75rem', fontSize: '0.875rem', color: '#334155' }}>
+                            {finding.pic_office || <span style={{ color: '#94a3b8' }}>-</span>}
+                          </td>
+                          <td style={{ padding: '1rem 0.75rem' }}>
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '0.25rem 0.75rem',
+                              borderRadius: '6px',
+                              fontSize: '0.75rem',
+                              fontWeight: '500',
+                              background: finding.status === 'Open' ? '#fee2e2' : '#d1fae5',
+                              color: finding.status === 'Open' ? '#991b1b' : '#065f46',
+                              border: `1px solid ${finding.status === 'Open' ? '#fecaca' : '#a7f3d0'}`
+                            }}>
                             {finding.status}
                           </span>
                         </td>
-                        <td>
+                          <td style={{ padding: '1rem 0.75rem' }}>
                             <PhotoCell 
                               photoString={finding.before_photo} 
                               type="before" 
                               finding={finding}
                             />
                         </td>
-                        <td>
+                          <td style={{ padding: '1rem 0.75rem' }}>
                             <PhotoCell 
                               photoString={finding.after_photo} 
                               type="after" 
                               finding={finding}
                             />
                         </td>
-                        <td>
+                          <td style={{ padding: '1rem 0.75rem' }}>
                           <VesselCommentCell 
                             finding={finding}
                             role={role}
@@ -1212,18 +1717,54 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                           />
                         </td>
                         {role === 'admin' && (
-                          <td className="text-center">
-                            <div className="btn-group">
+                            <td className="text-center" style={{ padding: '1rem 0.75rem' }}>
+                              <div className="d-flex gap-1 justify-content-center">
                               <button 
-                                className="btn btn-sm btn-outline-primary mr-2"
+                                  className="btn"
                                 onClick={() => handleEditFinding(finding)}
+                                  style={{
+                                    fontSize: '0.75rem',
+                                    padding: '0.375rem 0.75rem',
+                                    background: '#eff6ff',
+                                    color: '#1e40af',
+                                    border: '1px solid #1e40af',
+                                    borderRadius: '6px',
+                                    fontWeight: '500',
+                                    transition: 'all 0.2s'
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.target.style.background = '#1e40af';
+                                    e.target.style.color = 'white';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.target.style.background = '#eff6ff';
+                                    e.target.style.color = '#1e40af';
+                                  }}
                               >
                                 <i className="bi bi-pencil me-1"></i>
                                 Edit
                               </button>
                               <button 
-                                className="btn btn-sm btn-outline-danger"
+                                  className="btn"
                                 onClick={() => handleDeleteFinding(finding)}
+                                  style={{
+                                    fontSize: '0.75rem',
+                                    padding: '0.375rem 0.75rem',
+                                    background: '#fef2f2',
+                                    color: '#991b1b',
+                                    border: '1px solid #dc2626',
+                                    borderRadius: '6px',
+                                    fontWeight: '500',
+                                    transition: 'all 0.2s'
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.target.style.background = '#dc2626';
+                                    e.target.style.color = 'white';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.target.style.background = '#fef2f2';
+                                    e.target.style.color = '#991b1b';
+                                  }}
                               >
                                 <i className="bi bi-trash me-1"></i>
                                 Hapus
@@ -1232,16 +1773,25 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                           </td>
                         )}
                       </tr>
-
                       </React.Fragment>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="10" className="text-center py-5">
-                        <div className="text-muted">
-                          <i className="bi bi-inbox fs-1 d-block mb-3"></i>
-                          Belum ada temuan inspeksi
+                      <td colSpan={role === 'admin' ? 11 : 10} className="text-center py-5">
+                        <div style={{
+                          width: '80px',
+                          height: '80px',
+                          borderRadius: '50%',
+                          background: '#f1f5f9',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          margin: '0 auto 1rem'
+                        }}>
+                          <i className="bi bi-inbox" style={{ fontSize: '2rem', color: '#94a3b8' }}></i>
                         </div>
+                        <h5 style={{ color: '#475569', fontWeight: '600', marginBottom: '0.5rem' }}>Belum ada temuan inspeksi</h5>
+                        <p style={{ color: '#94a3b8', fontSize: '0.875rem', margin: 0 }}>Mulai dengan menambahkan temuan baru</p>
                       </td>
                     </tr>
                   )}
@@ -1320,22 +1870,124 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
 
       {/* Delete After Photo Modal */}
       {showDeleteAfterModal && (
-        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <div className="modal-dialog">
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1055 }}>
+          <div className="modal-dialog modal-dialog-centered">
             <div className="modal-content">
-              <div className="modal-header">
-                <h5 className="modal-title">Konfirmasi Hapus</h5>
-                <button type="button" className="btn-close" onClick={() => setShowDeleteAfterModal(false)}></button>
+              <div className="modal-header border-danger">
+                <h5 className="modal-title text-danger">
+                  <i className="bi bi-exclamation-triangle me-2"></i>
+                  Konfirmasi Hapus Foto After
+                </h5>
+                <button 
+                  type="button" 
+                  className="btn-close" 
+                  onClick={() => setShowDeleteAfterModal(false)}
+                  disabled={findingToDeleteAfter === null}
+                ></button>
               </div>
               <div className="modal-body">
                 <p>Apakah Anda yakin ingin menghapus SEMUA foto after untuk temuan #{findingToDeleteAfter?.no}?</p>
                 <p className="text-muted small">
                   Total foto yang akan dihapus: {getPhotoCount(findingToDeleteAfter?.after_photo)}
                 </p>
+                <div className="alert alert-warning py-2 mb-0 mt-3">
+                  <small>
+                    <i className="bi bi-info-circle me-1"></i>
+                    Foto yang sudah dihapus tidak dapat dikembalikan.
+                  </small>
+                </div>
               </div>
               <div className="modal-footer">
-                <button className="btn btn-secondary" onClick={() => setShowDeleteAfterModal(false)}>Batal</button>
-                <button className="btn btn-danger" onClick={confirmDeleteAfterPhoto}>Hapus Semua</button>
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => setShowDeleteAfterModal(false)}
+                  disabled={findingToDeleteAfter === null}
+                >
+                  Batal
+                </button>
+                <button 
+                  className="btn btn-danger" 
+                  onClick={confirmDeleteAfterPhoto}
+                  disabled={findingToDeleteAfter === null}
+                >
+                  <i className="bi bi-trash me-1"></i>
+                  Ya, Hapus Semua
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Finding Confirmation Modal */}
+      {deleteFindingConfirmation.isOpen && (
+        <div className="modal show d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1055 }}>
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content">
+              <div className="modal-header border-danger">
+                <h5 className="modal-title text-danger">
+                  <i className="bi bi-exclamation-triangle me-2"></i>
+                  Konfirmasi Hapus Temuan
+                </h5>
+                <button 
+                  type="button" 
+                  className="btn-close" 
+                  onClick={cancelDeleteFinding}
+                  disabled={deleteFindingConfirmation.deleting}
+                ></button>
+              </div>
+              <div className="modal-body">
+                <div className="d-flex align-items-start">
+                  <div className="flex-grow-1">
+                    <p className="mb-2">
+                      Apakah Anda yakin ingin menghapus <strong>temuan No.{deleteFindingConfirmation.finding?.no}</strong>?
+                    </p>
+                    <div className="alert alert-warning py-2 mb-0">
+                      <small>
+                        <i className="bi bi-info-circle me-1"></i>
+                        Semua data temuan termasuk foto before dan after akan dihapus permanen dan tidak dapat dikembalikan.
+                      </small>
+                    </div>
+                    {deleteFindingConfirmation.finding && (
+                      <div className="mt-3 p-2 bg-light rounded">
+                        <small className="text-muted d-block">
+                          <strong>Deskripsi:</strong> {deleteFindingConfirmation.finding.finding || '-'}
+                        </small>
+                        <small className="text-muted d-block mt-1">
+                          <strong>Kategori:</strong> {deleteFindingConfirmation.finding.category || '-'}
+                        </small>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  onClick={cancelDeleteFinding}
+                  disabled={deleteFindingConfirmation.deleting}
+                >
+                  Batal
+                </button>
+                <button 
+                  type="button" 
+                  className="btn btn-danger" 
+                  onClick={confirmDeleteFinding}
+                  disabled={deleteFindingConfirmation.deleting}
+                >
+                  {deleteFindingConfirmation.deleting ? (
+                    <>
+                      <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                      Menghapus...
+                    </>
+                  ) : (
+                    <>
+                      <i className="bi bi-trash me-1"></i>
+                      Ya, Hapus Temuan
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>

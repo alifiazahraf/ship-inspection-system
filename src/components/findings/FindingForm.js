@@ -53,12 +53,12 @@ const FindingForm = ({
   useEffect(() => {
     if (mode === 'edit' && finding) {
       setFormData({
-        finding: finding.finding,
-        picShip: finding.pic_ship,
-        picOffice: finding.pic_office,
-        category: finding.category,
-        status: finding.status,
-        date: finding.date.split('T')[0]
+        finding: finding.finding || '',
+        picShip: finding.pic_ship || '',
+        picOffice: finding.pic_office || '',
+        category: finding.category || DEFAULT_CATEGORY,
+        status: finding.status || DEFAULT_STATUS,
+        date: finding.date ? finding.date.split('T')[0] : new Date().toISOString().split('T')[0]
       });
     }
   }, [mode, finding]);

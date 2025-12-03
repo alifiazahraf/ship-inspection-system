@@ -26,7 +26,9 @@ function App() {
     });
 
     return () => {
-      listener.subscription.unsubscribe();
+      if (listener?.subscription) {
+        listener.subscription.unsubscribe();
+      }
     };
   }, []);
 
