@@ -2,6 +2,8 @@
  * Utility functions for handling multiple photos in findings
  */
 
+import { compressImage } from './imageUtils';
+
 /**
  * Parse photo URLs from database string format to array
  * @param {string|null} photoString - JSON string from database or single URL
@@ -64,12 +66,12 @@ export const getFirstPhotoUrl = (photoString) => {
 /**
  * Add new photo URL to existing photos
  * @param {string|null} existingPhotos - Existing photo string from database
- * @param {string} newPhotoUrl - New photo URL to add
+ * @param {...string} newPhotoUrls - New photo URLs to add
  * @returns {string} Updated photo string
  */
-export const addPhotoUrl = (existingPhotos, newPhotoUrl) => {
+export const addPhotoUrl = (existingPhotos, ...newPhotoUrls) => {
   const currentUrls = parsePhotoUrls(existingPhotos);
-  const updatedUrls = [...currentUrls, newPhotoUrl];
+  const updatedUrls = [...currentUrls, ...newPhotoUrls.filter(Boolean)];
   return serializePhotoUrls(updatedUrls);
 };
 
@@ -97,14 +99,15 @@ export const uploadMultiplePhotos = async (files, shipId, type, supabase) => {
   if (!files || files.length === 0) return [];
   
   const uploadPromises = files.map(async (file, index) => {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${shipId}/${type}_${Date.now()}_${index}.${fileExt}`;
-    const filePath = `findings/${fileName}`;
-
     try {
+      // Compress before upload to keep storage footprint small.
+      const { data: payload, ext, contentType } = await compressImage(file);
+      const fileName = `${shipId}/${type}_${Date.now()}_${index}.${ext}`;
+      const filePath = `findings/${fileName}`;
+
       const { error } = await supabase.storage
         .from('finding-images')
-        .upload(filePath, file);
+        .upload(filePath, payload, { contentType });
 
       if (error) throw error;
 
@@ -130,28 +133,44 @@ export const uploadMultiplePhotos = async (files, shipId, type, supabase) => {
  * @returns {Promise<void>}
  */
 export const deletePhotosFromStorage = async (photoUrls, supabase) => {
-  if (!photoUrls || photoUrls.length === 0) return;
-  
-  const deletePromises = photoUrls.map(async (url) => {
-    try {
-      // Extract file path from URL
+  if (!photoUrls || photoUrls.length === 0) return [];
+
+  // Kumpulkan URL yang GAGAL dihapus supaya pemanggil bisa memberitahu user
+  // (mencegah "diam-diam gagal" yang dulu menghasilkan orphan).
+  const failed = [];
+
+  await Promise.all(
+    photoUrls.map(async (url) => {
       const urlParts = url.split('/');
-      const bucketIndex = urlParts.findIndex(part => part === 'finding-images');
-      if (bucketIndex === -1) return;
-      
-      const filePath = urlParts.slice(bucketIndex + 1).join('/');
-      
-      const { error } = await supabase.storage
-        .from('finding-images')
-        .remove([filePath]);
-      
-      if (error) {
-        console.error('Error deleting photo:', error);
+      const bucketIndex = urlParts.findIndex((part) => part === 'finding-images');
+      if (bucketIndex === -1) {
+        console.error('Tidak bisa mem-parse path foto untuk dihapus:', url);
+        failed.push(url);
+        return;
       }
-    } catch (error) {
-      console.error('Error parsing photo URL for deletion:', error);
-    }
-  });
-  
-  await Promise.all(deletePromises);
-}; 
+
+      const filePath = urlParts.slice(bucketIndex + 1).join('/');
+
+      try {
+        const { data, error } = await supabase.storage
+          .from('finding-images')
+          .remove([filePath]);
+
+        if (error) {
+          console.error('Gagal menghapus foto dari storage:', filePath, error);
+          failed.push(url);
+        } else if (!data || data.length === 0) {
+          // remove() bisa "sukses" tanpa menghapus apa pun bila izin/policy
+          // storage kurang. Anggap gagal supaya tidak diam-diam jadi orphan.
+          console.error('Foto tidak terhapus dari storage (cek policy DELETE):', filePath);
+          failed.push(url);
+        }
+      } catch (error) {
+        console.error('Error menghapus foto dari storage:', filePath, error);
+        failed.push(url);
+      }
+    })
+  );
+
+  return failed; // array kosong = semua sukses
+};

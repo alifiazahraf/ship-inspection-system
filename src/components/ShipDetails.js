@@ -310,7 +310,10 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       const allPhotoUrls = [...beforePhotoUrls, ...afterPhotoUrls];
       
       if (allPhotoUrls.length > 0) {
-        await deletePhotosFromStorage(allPhotoUrls, supabase);
+        const failed = await deletePhotosFromStorage(allPhotoUrls, supabase);
+        if (failed.length > 0) {
+          toast.warn(`${failed.length} foto gagal dihapus dari storage dan akan dibersihkan otomatis nanti.`);
+        }
       }
 
       const { error } = await supabase
@@ -369,7 +372,10 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       // Delete all after photos from storage
       const afterPhotoUrls = parsePhotoUrls(findingToDeleteAfter.after_photo);
       if (afterPhotoUrls.length > 0) {
-        await deletePhotosFromStorage(afterPhotoUrls, supabase);
+        const failed = await deletePhotosFromStorage(afterPhotoUrls, supabase);
+        if (failed.length > 0) {
+          toast.warn(`${failed.length} foto gagal dihapus dari storage dan akan dibersihkan otomatis nanti.`);
+        }
       }
 
       const { error } = await supabase
@@ -840,7 +846,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       if (user) {
         logShipActivity(
           user,
-          ACTIVITY_TYPES.DOWNLOAD,
+          ACTIVITY_TYPES.VIEW,
           `Download laporan PDF kapal: ${selectedShip.ship_name} (${findings.length} temuan)`,
           selectedShip
         );
@@ -1036,7 +1042,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       if (user) {
         logShipActivity(
           user,
-          ACTIVITY_TYPES.DOWNLOAD,
+          ACTIVITY_TYPES.VIEW,
           `Download laporan Excel kapal: ${selectedShip.ship_name} (${findings.length} temuan)`,
           selectedShip
         );

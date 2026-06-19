@@ -138,8 +138,11 @@ const FindingForm = ({
       if (error) throw error;
       
       // Delete from storage
-      await deletePhotosFromStorage([photoUrl], supabase);
-      
+      const failed = await deletePhotosFromStorage([photoUrl], supabase);
+      if (failed.length > 0) {
+        toast.warn('Foto gagal dihapus dari storage dan akan dibersihkan otomatis nanti.');
+      }
+
       // Update local finding object
       finding.before_photo = updatedPhotos;
       
@@ -171,8 +174,11 @@ const FindingForm = ({
       if (error) throw error;
       
       // Delete from storage
-      await deletePhotosFromStorage([photoUrl], supabase);
-      
+      const failed = await deletePhotosFromStorage([photoUrl], supabase);
+      if (failed.length > 0) {
+        toast.warn('Foto gagal dihapus dari storage dan akan dibersihkan otomatis nanti.');
+      }
+
       // Update local finding object
       finding.after_photo = updatedPhotos;
       
