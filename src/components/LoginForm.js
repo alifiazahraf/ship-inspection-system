@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import { supabase } from '../supabaseClient'; // Import supabase client
 import { useNavigate } from 'react-router-dom';
+import { normalizeEmailForSubmit } from '../utils/emailUtils';
 
 const LoginForm = ({ onLogin }) => {
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -14,18 +15,19 @@ const LoginForm = ({ onLogin }) => {
     e.preventDefault();
     setLoading(true);
     setError('');
+    const normalizedEmail = normalizeEmailForSubmit(email);
 
     try {
-      console.log(username, password);
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: username, // atau ganti dengan email jika pakai email
+        email: normalizedEmail,
         password,
       });
-      console.log(data);
       if (error) {
         setError(error.message);
+      } else if (!data?.user) {
+        setError('Login gagal. Data user tidak ditemukan.');
       } else {
-        onLogin();
+        onLogin(data.user);
         navigate('/dashboard');
       }
     } catch (error) {
@@ -84,8 +86,8 @@ const LoginForm = ({ onLogin }) => {
 
             <form onSubmit={handleSubmit}>
               <div className="mb-3">
-                <label htmlFor="username" className="form-label mb-2" style={{ fontSize: '0.875rem', fontWeight: '500', color: '#475569' }}>
-                  Username / Email
+                <label htmlFor="email" className="form-label mb-2" style={{ fontSize: '0.875rem', fontWeight: '500', color: '#475569' }}>
+                  Email
                 </label>
                 <div className="position-relative">
                   <i className="bi bi-person position-absolute" style={{
@@ -99,11 +101,13 @@ const LoginForm = ({ onLogin }) => {
                   <input
                     type="text"
                     className="form-control"
-                    id="username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    id="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     required
-                    placeholder="Masukkan username atau email"
+                    placeholder="Masukkan email"
+                    inputMode="email"
+                    autoComplete="email"
                     style={{
                       paddingLeft: '2.5rem',
                       border: '1px solid #e2e8f0',

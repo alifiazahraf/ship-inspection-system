@@ -49,7 +49,7 @@ function App() {
             user ? (
               <Navigate to="/dashboard" replace />
             ) : (
-              <LoginForm onLogin={() => setUser(supabase.auth.user())} />
+              <LoginForm onLogin={(loggedInUser) => setUser(loggedInUser)} />
             )
           }
         />

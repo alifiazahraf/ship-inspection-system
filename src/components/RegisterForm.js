@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import { supabase } from '../supabaseClient';
+import { normalizeEmailForSubmit } from '../utils/emailUtils';
 
 const RegisterForm = () => {
   const [email, setEmail] = useState('');
@@ -10,24 +11,108 @@ const RegisterForm = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [emailError, setEmailError] = useState('');
+  const [suggestedEmail, setSuggestedEmail] = useState('');
+
+  // Fungsi untuk generate alternatif email jika ada titik di local part
+  const generateEmailAlternatives = (emailValue) => {
+    const normalizedEmail = normalizeEmailForSubmit(emailValue);
+    const parts = normalizedEmail.split('@');
+    if (parts.length !== 2) return [];
+    
+    const localPart = parts[0];
+    const domain = parts[1];
+    const alternatives = [];
+    
+    // Alternatif 1: Ganti titik dengan underscore
+    if (localPart.includes('.')) {
+      alternatives.push({
+        email: `${localPart.replace(/\./g, '_')}@${domain}`,
+        description: 'Ganti titik dengan underscore'
+      });
+    }
+    
+    // Alternatif 2: Hapus titik
+    if (localPart.includes('.')) {
+      alternatives.push({
+        email: `${localPart.replace(/\./g, '')}@${domain}`,
+        description: 'Hapus titik'
+      });
+    }
+    
+    // Alternatif 3: Ganti titik dengan hyphen
+    if (localPart.includes('.')) {
+      alternatives.push({
+        email: `${localPart.replace(/\./g, '-')}@${domain}`,
+        description: 'Ganti titik dengan hyphen'
+      });
+    }
+    
+    return alternatives;
+  };
+
+  const isDuplicateEmailError = (supabaseError) => {
+    const errorMessage = (supabaseError?.message || '').toLowerCase();
+    const errorCode = String(supabaseError?.code || supabaseError?.status || '').toLowerCase();
+
+    return (
+      errorMessage.includes('already registered') ||
+      errorMessage.includes('already exists') ||
+      errorMessage.includes('user already registered') ||
+      errorMessage.includes('email already registered') ||
+      errorMessage.includes('duplicate') ||
+      errorCode === 'user_already_registered' ||
+      errorCode === 'email_already_registered'
+    );
+  };
+
+  const isInvalidEmailError = (supabaseError) => {
+    const errorMessage = (supabaseError?.message || '').toLowerCase();
+    const errorCode = String(supabaseError?.code || '').toLowerCase();
+
+    return (
+      errorCode === 'email_address_invalid' ||
+      errorCode === 'invalid_email' ||
+      errorCode === 'validation_failed' ||
+      errorMessage.includes('invalid email') ||
+      errorMessage.includes('email format') ||
+      errorMessage.includes('email is invalid') ||
+      (errorMessage.includes('email address') && errorMessage.includes('invalid')) ||
+      errorMessage.includes('malformed')
+    );
+  };
 
   // Custom email validation - lebih fleksibel dari HTML5 validation
   const validateEmail = (emailValue) => {
+    const normalizedEmail = normalizeEmailForSubmit(emailValue);
+
     // Regex yang lebih fleksibel untuk email dengan subdomain panjang
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     
-    if (!emailValue) {
+    if (!normalizedEmail) {
       return 'Email wajib diisi.';
     }
     
-    if (!emailRegex.test(emailValue)) {
+    if (!emailRegex.test(normalizedEmail)) {
       return 'Format email tidak valid.';
     }
     
     // Validasi tambahan: pastikan ada domain
-    const parts = emailValue.split('@');
+    const parts = normalizedEmail.split('@');
     if (parts.length !== 2 || !parts[1] || !parts[1].includes('.')) {
       return 'Format email tidak valid.';
+    }
+    
+    // Validasi tambahan: pastikan domain tidak terlalu panjang
+    // Supabase mungkin membatasi panjang domain
+    const domain = parts[1];
+    if (domain.length > 253) { // Max domain length per RFC
+      return 'Domain email terlalu panjang.';
+    }
+    
+    // Validasi: pastikan local part (sebelum @) tidak terlalu panjang
+    const localPart = parts[0];
+    if (localPart.length > 64) { // Max local part length per RFC
+      return 'Bagian email sebelum @ terlalu panjang.';
     }
     
     return '';
@@ -37,6 +122,7 @@ const RegisterForm = () => {
     const emailValue = e.target.value;
     setEmail(emailValue);
     setEmailError('');
+    setSuggestedEmail(''); // Clear suggested email saat user mengetik
     
     // Validasi real-time saat user mengetik (opsional)
     if (emailValue && e.target.value.length > 0) {
@@ -60,16 +146,38 @@ const RegisterForm = () => {
     setError('');
     setEmailError('');
     setSuccess('');
+
+    const normalizedEmail = normalizeEmailForSubmit(email);
+    const submittedPassword = password || '';
     
-    // Validasi email custom
-    const emailValidationError = validateEmail(email);
+    // Validasi email tidak kosong
+    if (!normalizedEmail) {
+      setEmailError('Email wajib diisi.');
+      return;
+    }
+    
+    // Validasi password tidak kosong
+    if (!submittedPassword || submittedPassword.trim().length === 0) {
+      setError('Password wajib diisi.');
+      return;
+    }
+    
+    // Validasi password minimal (Supabase requirement)
+    if (submittedPassword.length < 6) {
+      setError('Password minimal 6 karakter.');
+      return;
+    }
+    
+    // Validasi email format (double check)
+    const emailValidationError = validateEmail(normalizedEmail);
     if (emailValidationError) {
       setEmailError(emailValidationError);
       return;
     }
-
-    if (!email || !password) {
-      setError('Email dan password wajib diisi.');
+    
+    // Pastikan email dan password adalah string yang valid
+    if (typeof normalizedEmail !== 'string' || typeof submittedPassword !== 'string') {
+      setError('Format input tidak valid.');
       return;
     }
     
@@ -77,63 +185,43 @@ const RegisterForm = () => {
 
     try {
       const { error } = await supabase.auth.signUp({
-        email,
-        password,
+        email: normalizedEmail,
+        password: submittedPassword,
         options: {
           data: {
-            role
+            role: role || 'user'
           }
         }
       });
 
       if (error) {
-        // Parse error dari Supabase untuk memberikan pesan yang lebih spesifik
-        const errorMessage = error.message || '';
-        const errorCode = error.status || error.code || '';
-        
-        // Debug: log error untuk membantu troubleshooting
-        console.log('Supabase Error:', {
-          message: errorMessage,
-          code: errorCode,
-          status: error.status,
-          fullError: error
-        });
-        
-        // Cek apakah email sudah terdaftar
-        // Supabase biasanya return error dengan message seperti:
-        // - "User already registered"
-        // - "Email already registered" 
-        // - Status code 422
-        if (
-          errorMessage.toLowerCase().includes('already registered') ||
-          errorMessage.toLowerCase().includes('already exists') ||
-          errorMessage.toLowerCase().includes('user already registered') ||
-          errorMessage.toLowerCase().includes('email already registered') ||
-          errorMessage.toLowerCase().includes('duplicate') ||
-          errorCode === 'user_already_registered' ||
-          errorCode === 'email_already_registered' ||
-          error.status === 422 ||
-          error.status === 400 // Kadang Supabase return 400 untuk duplicate
-        ) {
+        if (isDuplicateEmailError(error)) {
           setError('Email ini sudah terdaftar. Silakan gunakan email lain atau lakukan login.');
           setEmailError(''); // Clear email error karena ini bukan masalah format
         }
-        // Cek apakah format email tidak valid
-        else if (
-          errorMessage.toLowerCase().includes('invalid email') ||
-          errorMessage.toLowerCase().includes('email format') ||
-          errorMessage.toLowerCase().includes('email is invalid') ||
-          errorMessage.toLowerCase().includes('malformed') ||
-          errorCode === 'invalid_email' ||
-          errorCode === 'validation_failed' ||
-          error.status === 400 // Kadang 400 untuk invalid format
-        ) {
-          setEmailError('Format email tidak valid. Pastikan email yang Anda masukkan benar.');
+        else if (isInvalidEmailError(error)) {
+          const emailParts = normalizedEmail.split('@');
+          const localPart = emailParts[0];
+          const hasDotInLocalPart = localPart && localPart.includes('.');
+          
+          if (hasDotInLocalPart) {
+            // Generate alternatif email
+            const alternatives = generateEmailAlternatives(email);
+            if (alternatives.length > 0) {
+              const firstAlternative = alternatives[0];
+              setSuggestedEmail(firstAlternative.email);
+              setEmailError(`Format email tidak diterima oleh Supabase. Email dengan titik di local part mungkin ditolak. Coba gunakan format alternatif: ${firstAlternative.email}`);
+            } else {
+              setEmailError('Format email tidak diterima oleh Supabase. Email dengan titik di local part mungkin ditolak. Silakan gunakan email dengan format yang lebih standar.');
+            }
+          } else {
+            setEmailError('Format email tidak diterima oleh Supabase. Email ini mungkin memiliki format yang tidak didukung. Silakan gunakan email dengan format yang lebih standar (contoh: user@example.com).');
+          }
           setError(''); // Clear general error karena ini masalah format
         }
         // Error lainnya (password, network, dll)
         else {
-          setError(errorMessage || 'Terjadi kesalahan saat mendaftar. Silakan coba lagi.');
+          setError(error.message || 'Terjadi kesalahan saat mendaftar. Silakan coba lagi.');
           setEmailError(''); // Clear email error untuk error lainnya
         }
       } else {
@@ -218,7 +306,7 @@ const RegisterForm = () => {
                 e.stopPropagation();
               }}
             >
-              <div className="mb-3">
+        <div className="mb-3">
                 <label htmlFor="email" className="form-label mb-2" style={{ fontSize: '0.875rem', fontWeight: '500', color: '#475569' }}>
                   Email
                 </label>
@@ -231,13 +319,13 @@ const RegisterForm = () => {
                     fontSize: '0.875rem',
                     zIndex: 1
                   }}></i>
-                  <input
+          <input
                     type="text"
                     className={`form-control ${emailError ? 'is-invalid' : ''}`}
                     id="email"
-                    value={email}
+            value={email}
                     onChange={handleEmailChange}
-                    placeholder="Masukkan email"
+            placeholder="Masukkan email"
                     autoComplete="email"
                     style={{
                       paddingLeft: '2.5rem',
@@ -262,16 +350,57 @@ const RegisterForm = () => {
                       }
                       e.target.style.boxShadow = 'none';
                     }}
-                  />
-                </div>
+          />
+        </div>
                 {emailError && (
                   <div className="invalid-feedback d-block" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
                     {emailError}
                   </div>
                 )}
+                {suggestedEmail && (
+                  <div className="mt-2 p-2" style={{
+                    background: '#f0f9ff',
+                    border: '1px solid #bae6fd',
+                    borderRadius: '6px',
+                    fontSize: '0.75rem'
+                  }}>
+                    <div className="d-flex align-items-center justify-content-between">
+                      <div>
+                        <i className="bi bi-lightbulb me-1" style={{ color: '#0284c7' }}></i>
+                        <strong style={{ color: '#0284c7' }}>Saran:</strong> Gunakan email alternatif:
+                        <code className="ms-1" style={{ 
+                          background: '#e0f2fe', 
+                          padding: '2px 6px', 
+                          borderRadius: '4px',
+                          fontSize: '0.7rem'
+                        }}>{suggestedEmail}</code>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => {
+                          setEmail(suggestedEmail);
+                          setEmailError('');
+                          setSuggestedEmail('');
+                        }}
+                        style={{
+                          background: '#0284c7',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          padding: '2px 8px',
+                          fontSize: '0.7rem',
+                          marginLeft: '8px'
+                        }}
+                      >
+                        Gunakan
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="mb-3">
+        <div className="mb-3">
                 <label htmlFor="password" className="form-label mb-2" style={{ fontSize: '0.875rem', fontWeight: '500', color: '#475569' }}>
                   Password
                 </label>
@@ -284,13 +413,13 @@ const RegisterForm = () => {
                     fontSize: '0.875rem',
                     zIndex: 1
                   }}></i>
-                  <input
-                    type="password"
-                    className="form-control"
+          <input
+            type="password"
+            className="form-control"
                     id="password"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Masukkan password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            placeholder="Masukkan password"
                     autoComplete="new-password"
                     style={{
                       paddingLeft: '2.5rem',
@@ -307,8 +436,8 @@ const RegisterForm = () => {
                       e.target.style.borderColor = '#e2e8f0';
                       e.target.style.boxShadow = 'none';
                     }}
-                  />
-                </div>
+          />
+        </div>
               </div>
 
               <div className="mb-4">
@@ -324,11 +453,11 @@ const RegisterForm = () => {
                     fontSize: '0.875rem',
                     zIndex: 1
                   }}></i>
-                  <select
-                    className="form-select"
+          <select
+            className="form-select"
                     id="role"
-                    value={role}
-                    onChange={e => setRole(e.target.value)}
+            value={role}
+            onChange={e => setRole(e.target.value)}
                     style={{
                       paddingLeft: '2.5rem',
                       border: '1px solid #e2e8f0',
@@ -344,11 +473,11 @@ const RegisterForm = () => {
                       e.target.style.borderColor = '#e2e8f0';
                       e.target.style.boxShadow = 'none';
                     }}
-                  >
-                    <option value="user">User (Crew Kapal)</option>
-                    <option value="admin">Admin (Marine Surveyor)</option>
-                  </select>
-                </div>
+          >
+            <option value="user">User (Crew Kapal)</option>
+            <option value="admin">Admin (Marine Surveyor)</option>
+          </select>
+        </div>
               </div>
 
               <button
@@ -389,8 +518,8 @@ const RegisterForm = () => {
                     Register
                   </>
                 )}
-              </button>
-            </form>
+        </button>
+      </form>
           </div>
         </div>
       </div>
