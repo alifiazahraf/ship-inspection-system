@@ -1,5 +1,4 @@
 import { supabase } from '../supabaseClient';
-import { toast } from 'react-toastify';
 
 export const uploadImage = async (file, shipId, type = 'before') => {
   if (!file) return null;
