@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
 import AddFindingForm from './AddFindingForm';
 import EditFindingForm from './EditFindingForm';
@@ -21,6 +21,21 @@ import {
   getOptimizedImageForPDF,  
   PDF_IMAGE_CONFIGS 
 } from '../utils/imageOptimizer';
+import { generateFindingPhotosWord } from '../utils/wordGenerator';
+
+const EMPTY_FILTERS = {
+  year: '',
+  search: '',
+  category: '',
+  picShip: '',
+  picOffice: '',
+  status: ''
+};
+
+const FILTER_LABEL_STYLE = { fontSize: '0.75rem', fontWeight: '500', color: '#64748b' };
+
+// Date is stored as 'YYYY-MM-DD'; read the year directly to avoid timezone shifts
+const getFindingYear = (date) => (date ? String(date).slice(0, 4) : '');
 
 const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role = 'admin', user }) => {
   const [findings, setFindings] = useState([]);
@@ -38,6 +53,8 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   const [pdfProgress, setPdfProgress] = useState({ step: '', progress: 0 });
   const [downloadingExcel, setDownloadingExcel] = useState(false);
   const [excelProgress, setExcelProgress] = useState({ step: '', progress: 0 });
+  const [downloadingWord, setDownloadingWord] = useState(false);
+  const [wordProgress, setWordProgress] = useState({ step: '', progress: 0 });
   const [showDeleteAfterModal, setShowDeleteAfterModal] = useState(false);
   const [findingToDeleteAfter, setFindingToDeleteAfter] = useState(null);
   const [deleteFindingConfirmation, setDeleteFindingConfirmation] = useState({
@@ -46,7 +63,44 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
     deleting: false
   });
 
-  
+  // Findings filter state
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+
+  const filterOptions = useMemo(() => {
+    const uniqueSorted = (values) =>
+      [...new Set(values.filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
+    return {
+      years: [...new Set(findings.map(f => getFindingYear(f.date)).filter(Boolean))].sort((a, b) => b.localeCompare(a)),
+      categories: uniqueSorted(findings.map(f => f.category)),
+      picShips: uniqueSorted(findings.map(f => f.pic_ship)),
+      picOffices: uniqueSorted(findings.map(f => f.pic_office)),
+      statuses: uniqueSorted(findings.map(f => f.status))
+    };
+  }, [findings]);
+
+  // Filtered findings, renumbered sequentially (displayNo) for table and exports
+  const filteredFindings = useMemo(() => {
+    const search = filters.search.trim().toLowerCase();
+    return findings
+      .filter(f =>
+        (!filters.year || getFindingYear(f.date) === filters.year) &&
+        (!search || f.finding?.toLowerCase().includes(search)) &&
+        (!filters.category || f.category === filters.category) &&
+        (!filters.picShip || f.pic_ship === filters.picShip) &&
+        (!filters.picOffice || f.pic_office === filters.picOffice) &&
+        (!filters.status || f.status === filters.status)
+      )
+      .map((f, index) => ({ ...f, displayNo: index + 1 }));
+  }, [findings, filters]);
+
+  const isFilterActive = Object.values(filters).some(value => value.trim() !== '');
+  const findingCountLabel = isFilterActive
+    ? `${filteredFindings.length} dari ${findings.length}`
+    : `${findings.length}`;
+
+  const updateFilter = (key, value) => setFilters(prev => ({ ...prev, [key]: value }));
+  const resetFilters = () => setFilters(EMPTY_FILTERS);
+
   // Photo gallery modal state
   const [photoGallery, setPhotoGallery] = useState({
     isOpen: false,
@@ -62,7 +116,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       isOpen: true,
       photos: photos,
       currentIndex: clickedIndex,
-      title: `${type === 'before' ? 'Foto Before' : 'Foto After'} - Temuan No.${finding.no} `
+      title: `${type === 'before' ? 'Foto Before' : 'Foto After'} - Temuan No.${finding.displayNo ?? finding.no} `
     });
   };
 
@@ -186,6 +240,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   };
 
   useEffect(() => {
+    setFilters(EMPTY_FILTERS);
     if (selectedShip?.id) {
       fetchShipData();
     }
@@ -500,7 +555,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       doc.text(`Inspeksi Terakhir: ${latestInspectionDate ? new Date(latestInspectionDate).toLocaleDateString('id-ID') : 'Belum ada'}`, 300, shipInfoY);
       doc.text(`Kode Kapal: ${selectedShip.ship_code}`, 550, shipInfoY);
       
-      doc.text(`Total Temuan: ${findings.length}`, 50, shipInfoY + 20);
+      doc.text(`Total Temuan: ${findingCountLabel}`, 50, shipInfoY + 20);
       doc.text(`Tanggal Cetak: ${new Date().toLocaleDateString('id-ID')}`, 300, shipInfoY + 20);
       doc.text(`User: ${assignedUser ? assignedUser.email : 'Belum di-assign'}`, 550, shipInfoY + 20);
 
@@ -526,7 +581,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       setPdfProgress({ step: 'Mengoptimasi gambar untuk tabel...', progress: 10 });
       
       const imagePromises = [];
-      findings.forEach(finding => {
+      filteredFindings.forEach(finding => {
         const beforeUrl = getFirstPhotoUrl(finding.before_photo);
         const afterUrl = getFirstPhotoUrl(finding.after_photo);
         
@@ -545,12 +600,12 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       const images = await Promise.all(imagePromises);
       setPdfProgress({ step: 'Membuat tabel utama...', progress: 30 });
       
-      const tableRows = findings.map((finding, index) => {
+      const tableRows = filteredFindings.map((finding, index) => {
         const beforeCount = getPhotoCount(finding.before_photo);
         const afterCount = getPhotoCount(finding.after_photo);
-        
+
         return {
-          no: finding.no,
+          no: finding.displayNo,
           date: new Date(finding.date).toLocaleDateString('id-ID'),
           finding: finding.finding,
           category: finding.category,
@@ -641,7 +696,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       setPdfProgress({ step: 'Tabel utama selesai...', progress: 50 });
 
       // Add Photo Detail Section for findings with multiple photos
-      const findingsWithMultiplePhotos = findings.filter(finding => 
+      const findingsWithMultiplePhotos = filteredFindings.filter(finding =>
         getPhotoCount(finding.before_photo) > 1 || getPhotoCount(finding.after_photo) > 1
       );
 
@@ -697,7 +752,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           // Finding header
           doc.setFontSize(12);
           doc.setFont('helvetica', 'bold');
-          doc.text(`TEMUAN #${finding.no}: ${finding.finding.substring(0, 80)}${finding.finding.length > 80 ? '...' : ''}`, margin, currentY);
+          doc.text(`TEMUAN #${finding.displayNo}: ${finding.finding.substring(0, 80)}${finding.finding.length > 80 ? '...' : ''}`, margin, currentY);
           currentY += 20;
 
           // Before photos section
@@ -847,7 +902,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         logShipActivity(
           user,
           ACTIVITY_TYPES.VIEW,
-          `Download laporan PDF kapal: ${selectedShip.ship_name} (${findings.length} temuan)`,
+          `Download laporan PDF kapal: ${selectedShip.ship_name} (${findingCountLabel} temuan)`,
           selectedShip
         );
       }
@@ -877,7 +932,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       setExcelProgress({ step: 'Menyiapkan data dengan format baru...', progress: 25 });
 
       // Prepare data following the requested survey format
-      const currentYear = new Date().getFullYear();
+      const currentYear = filters.year || new Date().getFullYear();
       const shipTitle = selectedShip.ship_name ? selectedShip.ship_name.toUpperCase() : 'KAPAL';
       const sheetData = [
         [`SURVEI RUTIN - ${currentYear}`, '', '', '', '', '', '', ''],
@@ -886,9 +941,9 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         ['', '', '', "Vessel's", 'Office', '', '', '']
       ];
 
-      findings.forEach((finding) => {
+      filteredFindings.forEach((finding) => {
         sheetData.push([
-          finding.no ?? '',
+          finding.displayNo,
           finding.date ? new Date(finding.date).toLocaleDateString('id-ID') : '', // Tanggal
           finding.finding || '',
           finding.pic_ship || '',
@@ -1001,7 +1056,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         ['Nama Kapal', selectedShip.ship_name],
         ['Kode Kapal', selectedShip.ship_code],
         ['Inspeksi Terakhir', latestInspectionDate ? new Date(latestInspectionDate).toLocaleDateString('id-ID') : 'Belum ada'],
-        ['Total Temuan', findings.length],
+        ['Total Temuan', findingCountLabel],
         ['Tanggal Cetak', new Date().toLocaleDateString('id-ID')],
         ['User di-assign', assignedUser ? assignedUser.email : 'Belum di-assign']
       ];
@@ -1043,7 +1098,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         logShipActivity(
           user,
           ACTIVITY_TYPES.VIEW,
-          `Download laporan Excel kapal: ${selectedShip.ship_name} (${findings.length} temuan)`,
+          `Download laporan Excel kapal: ${selectedShip.ship_name} (${findingCountLabel} temuan)`,
           selectedShip
         );
       }
@@ -1055,6 +1110,58 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
       setTimeout(() => {
         setDownloadingExcel(false);
         setExcelProgress({ step: '', progress: 0 });
+      }, 1000);
+    }
+  };
+
+  const handleDownloadWord = async () => {
+    setDownloadingWord(true);
+    setWordProgress({ step: 'Memuat foto...', progress: 0 });
+
+    try {
+      toast.info('Menyiapkan dokumen Word, mohon tunggu...', {
+        position: "top-center",
+        autoClose: 2000
+      });
+
+      const blob = await generateFindingPhotosWord({
+        ship: selectedShip,
+        findings: filteredFindings,
+        onProgress: (done, total) => setWordProgress({
+          step: `Memuat foto ${done}/${total}...`,
+          progress: Math.round((done / total) * 90)
+        })
+      });
+
+      setWordProgress({ step: 'Menyimpan file...', progress: 95 });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Foto Temuan - Inspeksi ${selectedShip.ship_name}.docx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setWordProgress({ step: 'Word berhasil dibuat!', progress: 100 });
+      toast.success('Dokumen Word berhasil diunduh!');
+
+      if (user) {
+        logShipActivity(
+          user,
+          ACTIVITY_TYPES.VIEW,
+          `Download foto temuan (Word) kapal: ${selectedShip.ship_name} (${findingCountLabel} temuan)`,
+          selectedShip
+        );
+      }
+    } catch (error) {
+      console.error('Error generating Word:', error);
+      toast.error('Terjadi kesalahan saat membuat dokumen Word');
+      setWordProgress({ step: 'Error!', progress: 0 });
+    } finally {
+      setTimeout(() => {
+        setDownloadingWord(false);
+        setWordProgress({ step: '', progress: 0 });
       }, 1000);
     }
   };
@@ -1364,7 +1471,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           <button 
                   className="btn d-flex align-items-center gap-2"
             onClick={handleDownloadPDF}
-            disabled={loading || downloadingPDF}
+            disabled={loading || downloadingPDF || filteredFindings.length === 0}
                   style={{
                     background: 'white',
                     color: '#1e40af',
@@ -1413,7 +1520,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           <button 
                   className="btn d-flex align-items-center gap-2"
             onClick={handleDownloadExcel}
-            disabled={loading || downloadingExcel}
+            disabled={loading || downloadingExcel || filteredFindings.length === 0}
                   style={{
                     background: '#1e40af',
                     color: 'white',
@@ -1459,6 +1566,56 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
               </>
             )}
           </button>
+          <button
+                  className="btn d-flex align-items-center gap-2"
+            onClick={handleDownloadWord}
+            disabled={loading || downloadingWord || filteredFindings.length === 0}
+                  title="Download foto temuan (before & after) dalam format Word"
+                  style={{
+                    background: 'white',
+                    color: '#1e40af',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: '8px',
+                    padding: '0.5rem 1rem',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    transition: 'all 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!loading && !downloadingWord) {
+                      e.target.style.background = '#eff6ff';
+                      e.target.style.borderColor = '#1e40af';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!loading && !downloadingWord) {
+                      e.target.style.background = 'white';
+                      e.target.style.borderColor = '#bfdbfe';
+                    }
+                  }}
+          >
+            {downloadingWord ? (
+              <>
+                <span className="spinner-border spinner-border-sm" role="status" style={{ width: '0.875rem', height: '0.875rem' }}></span>
+                <div className="d-flex flex-column align-items-start ms-2">
+                  <small style={{ fontSize: '0.7rem', lineHeight: '1.2' }}>{wordProgress.step}</small>
+                  {wordProgress.progress > 0 && (
+                    <div className="progress mt-1" style={{ width: '60px', height: '2px', backgroundColor: '#e2e8f0' }}>
+                      <div
+                        className="progress-bar"
+                        style={{ width: `${wordProgress.progress}%`, backgroundColor: '#1e40af' }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <i className="bi bi-file-earmark-word"></i>
+                <span>Download Word</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
@@ -1500,7 +1657,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                 Total Temuan
               </h6>
               <p className="mb-0" style={{ fontSize: '1.125rem', fontWeight: '600', color: '#0f172a' }}>
-                {loading ? '...' : `${findings.length}`}
+                {loading ? '...' : findingCountLabel}
               </p>
             </div>
           </div>
@@ -1531,10 +1688,72 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
         }}>
           <h6 className="mb-0 fw-semibold" style={{ color: '#1e40af' }}>
             <i className="bi bi-list-ul me-2"></i>
-            Daftar Temuan ({findings.length} temuan)
+            Daftar Temuan ({findingCountLabel} temuan)
           </h6>
         </div>
         <div className="card-body p-0">
+          {!loading && findings.length > 0 && (
+            <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #f1f5f9' }}>
+              <div className="row g-2 align-items-end">
+                <div className="col-6 col-md-2">
+                  <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>Tahun</label>
+                  <select className="form-select form-select-sm" value={filters.year} onChange={(e) => updateFilter('year', e.target.value)}>
+                    <option value="">Semua</option>
+                    {filterOptions.years.map(year => <option key={year} value={year}>{year}</option>)}
+                  </select>
+                </div>
+                <div className="col-6 col-md-3">
+                  <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>Finding</label>
+                  <input
+                    type="text"
+                    className="form-control form-control-sm"
+                    placeholder="Cari finding..."
+                    value={filters.search}
+                    onChange={(e) => updateFilter('search', e.target.value)}
+                  />
+                </div>
+                <div className="col-6 col-md-2">
+                  <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>Category</label>
+                  <select className="form-select form-select-sm" value={filters.category} onChange={(e) => updateFilter('category', e.target.value)}>
+                    <option value="">Semua</option>
+                    {filterOptions.categories.map(category => <option key={category} value={category}>{category}</option>)}
+                  </select>
+                </div>
+                <div className="col-6 col-md-1">
+                  <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>PIC Kapal</label>
+                  <select className="form-select form-select-sm" value={filters.picShip} onChange={(e) => updateFilter('picShip', e.target.value)}>
+                    <option value="">Semua</option>
+                    {filterOptions.picShips.map(pic => <option key={pic} value={pic}>{pic}</option>)}
+                  </select>
+                </div>
+                <div className="col-6 col-md-1">
+                  <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>PIC Kantor</label>
+                  <select className="form-select form-select-sm" value={filters.picOffice} onChange={(e) => updateFilter('picOffice', e.target.value)}>
+                    <option value="">Semua</option>
+                    {filterOptions.picOffices.map(pic => <option key={pic} value={pic}>{pic}</option>)}
+                  </select>
+                </div>
+                <div className="col-6 col-md-1">
+                  <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>Status</label>
+                  <select className="form-select form-select-sm" value={filters.status} onChange={(e) => updateFilter('status', e.target.value)}>
+                    <option value="">Semua</option>
+                    {filterOptions.statuses.map(status => <option key={status} value={status}>{status}</option>)}
+                  </select>
+                </div>
+                <div className="col-12 col-md-2">
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline-secondary w-100"
+                    onClick={resetFilters}
+                    disabled={!isFilterActive}
+                  >
+                    <i className="bi bi-arrow-counterclockwise me-1"></i>
+                    Reset Filter
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {loading ? (
             <div className="text-center py-5">
               <div className="spinner-border" role="status" style={{ color: '#1e40af' }}>
@@ -1631,8 +1850,8 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                   </tr>
                 </thead>
                 <tbody>
-                  {findings.length > 0 ? (
-                    findings.map((finding) => (
+                  {filteredFindings.length > 0 ? (
+                    filteredFindings.map((finding) => (
                       <React.Fragment key={finding.id}>
                         <tr style={{
                           borderBottom: '1px solid #f1f5f9',
@@ -1658,7 +1877,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                               fontSize: '0.75rem',
                               fontWeight: '600'
                             }}>
-                              {finding.no}
+                              {finding.displayNo}
                             </span>
                           </td>
                           <td style={{ padding: '1rem 0.75rem', fontSize: '0.875rem', color: '#475569' }}>
@@ -1796,8 +2015,17 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                         }}>
                           <i className="bi bi-inbox" style={{ fontSize: '2rem', color: '#94a3b8' }}></i>
                         </div>
-                        <h5 style={{ color: '#475569', fontWeight: '600', marginBottom: '0.5rem' }}>Belum ada temuan inspeksi</h5>
-                        <p style={{ color: '#94a3b8', fontSize: '0.875rem', margin: 0 }}>Mulai dengan menambahkan temuan baru</p>
+                        {isFilterActive && findings.length > 0 ? (
+                          <>
+                            <h5 style={{ color: '#475569', fontWeight: '600', marginBottom: '0.5rem' }}>Tidak ada temuan yang sesuai filter</h5>
+                            <p style={{ color: '#94a3b8', fontSize: '0.875rem', margin: 0 }}>Ubah atau reset filter untuk melihat temuan lainnya</p>
+                          </>
+                        ) : (
+                          <>
+                            <h5 style={{ color: '#475569', fontWeight: '600', marginBottom: '0.5rem' }}>Belum ada temuan inspeksi</h5>
+                            <p style={{ color: '#94a3b8', fontSize: '0.875rem', margin: 0 }}>Mulai dengan menambahkan temuan baru</p>
+                          </>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -1815,7 +2043,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           <div className="modal-dialog">
             <div className="modal-content">
               <div className="modal-header">
-                <h5 className="modal-title">Upload Foto After - Temuan #{selectedFinding?.no}</h5>
+                <h5 className="modal-title">Upload Foto After - Temuan #{selectedFinding?.displayNo ?? selectedFinding?.no}</h5>
                 <button type="button" className="btn-close" onClick={() => setShowUploadModal(false)}></button>
               </div>
               <div className="modal-body">
@@ -1892,7 +2120,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                 ></button>
               </div>
               <div className="modal-body">
-                <p>Apakah Anda yakin ingin menghapus SEMUA foto after untuk temuan #{findingToDeleteAfter?.no}?</p>
+                <p>Apakah Anda yakin ingin menghapus SEMUA foto after untuk temuan #{findingToDeleteAfter?.displayNo ?? findingToDeleteAfter?.no}?</p>
                 <p className="text-muted small">
                   Total foto yang akan dihapus: {getPhotoCount(findingToDeleteAfter?.after_photo)}
                 </p>
@@ -1946,7 +2174,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                 <div className="d-flex align-items-start">
                   <div className="flex-grow-1">
                     <p className="mb-2">
-                      Apakah Anda yakin ingin menghapus <strong>temuan No.{deleteFindingConfirmation.finding?.no}</strong>?
+                      Apakah Anda yakin ingin menghapus <strong>temuan No.{deleteFindingConfirmation.finding?.displayNo ?? deleteFindingConfirmation.finding?.no}</strong>?
                     </p>
                     <div className="alert alert-warning py-2 mb-0">
                       <small>
