@@ -1,12 +1,43 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import LoadingSpinner from './common/LoadingSpinner';
 import { ToastContainer, toast } from 'react-toastify';
 import { getPhotoCount, getFirstPhotoUrl, parsePhotoUrls } from '../utils/photoUtils';
 import * as XLSX from 'xlsx';
+import {
+  EMPTY_FINDING_FILTERS,
+  buildFindingFilterOptions,
+  matchesFindingFilters,
+  hasActiveFindingFilters
+} from '../utils/findingFilters';
 import logo from '../assets/images/gls-logo.png';
 import 'react-toastify/dist/ReactToastify.css';
+
+// Dropdown filters shown below the search row; the page keeps its own broad search box
+const DROPDOWN_FILTERS = [
+  { key: 'year', label: 'Tahun', icon: 'bi-calendar3', options: 'years' },
+  { key: 'category', label: 'Category', icon: 'bi-tag', options: 'categories' },
+  { key: 'picShip', label: 'PIC Kapal', icon: 'bi-person', options: 'picShips' },
+  { key: 'picOffice', label: 'PIC Kantor', icon: 'bi-building', options: 'picOffices' },
+  { key: 'status', label: 'Status', icon: 'bi-flag', options: 'statuses' }
+];
+
+const FILTER_SELECT_STYLE = {
+  border: '1px solid #e2e8f0',
+  borderRadius: '8px',
+  fontSize: '0.875rem'
+};
+
+const FILTER_CHIP_STYLE = {
+  background: '#eff6ff',
+  color: '#1e40af',
+  border: '1px solid #bfdbfe',
+  padding: '0.375rem 0.75rem',
+  borderRadius: '6px',
+  fontSize: '0.75rem',
+  fontWeight: '500'
+};
 
 const AllFindingsPage = ({ user, handleLogout }) => {
   const [findings, setFindings] = useState([]);
@@ -15,6 +46,7 @@ const AllFindingsPage = ({ user, handleLogout }) => {
   const [selectedShip, setSelectedShip] = useState('');
   const [ships, setShips] = useState([]);
   const [sortOrder, setSortOrder] = useState('desc'); // 'asc' or 'desc'
+  const [filters, setFilters] = useState(EMPTY_FINDING_FILTERS);
   const [downloadingExcel, setDownloadingExcel] = useState(false);
   const [excelProgress, setExcelProgress] = useState({ step: '', progress: 0 });
   const [photoGallery, setPhotoGallery] = useState({
@@ -86,6 +118,21 @@ const AllFindingsPage = ({ user, handleLogout }) => {
     }
   };
 
+  // Dropdown options come from the findings of the selected ship (or all ships)
+  const filterOptions = useMemo(() => buildFindingFilterOptions(
+    selectedShip === '' ? findings : findings.filter(f => f.ship_id.toString() === selectedShip),
+    filters
+  ), [findings, selectedShip, filters]);
+
+  const isFilterActive = hasActiveFindingFilters(filters);
+  const hasAnyFilter = Boolean(searchTerm || selectedShip || isFilterActive);
+  const updateFilter = (key, value) => setFilters(prev => ({ ...prev, [key]: value }));
+  const clearAllFilters = () => {
+    setSearchTerm('');
+    setSelectedShip('');
+    setFilters(EMPTY_FINDING_FILTERS);
+  };
+
   const filteredFindings = findings
     .filter(finding => {
       const matchesSearch = 
@@ -100,7 +147,7 @@ const AllFindingsPage = ({ user, handleLogout }) => {
       
       const matchesShip = selectedShip === '' || finding.ship_id.toString() === selectedShip;
       
-      return matchesSearch && matchesShip;
+      return matchesSearch && matchesShip && matchesFindingFilters(finding, filters);
     })
     .sort((a, b) => {
       const dateA = new Date(a.date);
@@ -266,7 +313,7 @@ const AllFindingsPage = ({ user, handleLogout }) => {
       setExcelProgress({ step: 'Menyiapkan data dengan format baru...', progress: 25 });
 
       // Prepare data following the requested survey format
-      const currentYear = new Date().getFullYear();
+      const currentYear = filters.year || new Date().getFullYear();
       const sheetData = [
         [`SURVEI RUTIN - ${currentYear}`, '', '', '', '', '', '', '', ''],
         ['', '', '', '', '', '', '', '', ''],
@@ -398,7 +445,7 @@ const AllFindingsPage = ({ user, handleLogout }) => {
 
       // Additional information worksheet
       const infoData = [
-        ['Total Temuan', filteredFindings.length],
+        ['Total Temuan', hasAnyFilter ? `${filteredFindings.length} dari ${findings.length}` : filteredFindings.length],
         ['Tanggal Cetak', new Date().toLocaleDateString('id-ID')],
         ['User', user?.email || 'Unknown']
       ];
@@ -862,8 +909,44 @@ const AllFindingsPage = ({ user, handleLogout }) => {
               </div>
             </div>
               
+            {/* Dropdown Filters */}
+            <div className="row g-3 mt-1 align-items-end">
+              {DROPDOWN_FILTERS.map(({ key, label, icon, options }) => (
+                <div key={key} className="col-6 col-md-2">
+                  <label className="form-label mb-2" style={{ fontSize: '0.875rem', fontWeight: '500', color: '#475569' }}>
+                    <i className={`bi ${icon} me-1`}></i>
+                    {label}
+                  </label>
+                  <select
+                    className="form-select"
+                    aria-label={label}
+                    value={filters[key]}
+                    onChange={(e) => updateFilter(key, e.target.value)}
+                    style={FILTER_SELECT_STYLE}
+                  >
+                    <option value="">Semua</option>
+                    {filterOptions[options].map(value => (
+                      <option key={value} value={value}>{value}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+              <div className="col-12 col-md-2">
+                <button
+                  type="button"
+                  className="btn btn-outline-secondary w-100"
+                  onClick={() => setFilters(EMPTY_FINDING_FILTERS)}
+                  disabled={!isFilterActive}
+                  style={{ borderRadius: '8px', fontSize: '0.875rem' }}
+                >
+                  <i className="bi bi-arrow-counterclockwise me-1"></i>
+                  Reset Filter
+                </button>
+              </div>
+            </div>
+              
             {/* Filter Summary */}
-            {(searchTerm || selectedShip) && (
+            {hasAnyFilter && (
               <div className="mt-4 pt-3 border-top">
                 <div className="d-flex flex-wrap gap-2 align-items-center">
                   <small className="text-muted fw-medium" style={{ fontSize: '0.75rem' }}>Filter aktif:</small>
@@ -905,12 +988,21 @@ const AllFindingsPage = ({ user, handleLogout }) => {
                       ></button>
                     </span>
                   )}
+                  {DROPDOWN_FILTERS.filter(({ key }) => filters[key]).map(({ key, label, icon }) => (
+                    <span key={key} className="badge d-flex align-items-center gap-1" style={FILTER_CHIP_STYLE}>
+                      <i className={`bi ${icon}`}></i>
+                      {label}: {filters[key]}
+                      <button
+                        className="btn-close"
+                        aria-label={`Hapus filter ${label}`}
+                        onClick={() => updateFilter(key, '')}
+                        style={{ fontSize: '0.6rem', marginLeft: '0.25rem' }}
+                      ></button>
+                    </span>
+                  ))}
                   <button
                     className="btn btn-link p-0"
-                    onClick={() => {
-                      setSearchTerm('');
-                      setSelectedShip('');
-                    }}
+                    onClick={clearAllFilters}
                     style={{
                       fontSize: '0.75rem',
                       color: '#64748b',
@@ -965,7 +1057,7 @@ const AllFindingsPage = ({ user, handleLogout }) => {
                   </div>
                   <h5 style={{ color: '#475569', fontWeight: '600', marginBottom: '0.5rem' }}>Tidak ada temuan</h5>
                   <p style={{ color: '#94a3b8', fontSize: '0.875rem', margin: 0 }}>
-                    {searchTerm || selectedShip 
+                    {hasAnyFilter
                       ? 'Tidak ada temuan yang sesuai dengan filter'
                       : 'Belum ada data temuan'
                     }

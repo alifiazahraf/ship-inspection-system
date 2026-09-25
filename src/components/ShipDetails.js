@@ -22,20 +22,23 @@ import {
   PDF_IMAGE_CONFIGS 
 } from '../utils/imageOptimizer';
 import { generateFindingPhotosWord } from '../utils/wordGenerator';
-
-const EMPTY_FILTERS = {
-  year: '',
-  search: '',
-  category: '',
-  picShip: '',
-  picOffice: '',
-  status: ''
-};
+import {
+  EMPTY_FINDING_FILTERS,
+  buildFindingFilterOptions,
+  matchesFindingFilters,
+  hasActiveFindingFilters
+} from '../utils/findingFilters';
 
 const FILTER_LABEL_STYLE = { fontSize: '0.75rem', fontWeight: '500', color: '#64748b' };
 
-// Date is stored as 'YYYY-MM-DD'; read the year directly to avoid timezone shifts
-const getFindingYear = (date) => (date ? String(date).slice(0, 4) : '');
+// Keeps Edit/Hapus visible when the findings table scrolls horizontally
+const STICKY_ACTION_CELL_STYLE = {
+  position: 'sticky',
+  right: 0,
+  zIndex: 1,
+  backgroundColor: 'white',
+  boxShadow: 'inset 1px 0 0 #e2e8f0, -6px 0 8px -6px rgba(15, 23, 42, 0.15)'
+};
 
 const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role = 'admin', user }) => {
   const [findings, setFindings] = useState([]);
@@ -64,42 +67,22 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   });
 
   // Findings filter state
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [filters, setFilters] = useState(EMPTY_FINDING_FILTERS);
 
-  const filterOptions = useMemo(() => {
-    const uniqueSorted = (values) =>
-      [...new Set(values.filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
-    return {
-      years: [...new Set(findings.map(f => getFindingYear(f.date)).filter(Boolean))].sort((a, b) => b.localeCompare(a)),
-      categories: uniqueSorted(findings.map(f => f.category)),
-      picShips: uniqueSorted(findings.map(f => f.pic_ship)),
-      picOffices: uniqueSorted(findings.map(f => f.pic_office)),
-      statuses: uniqueSorted(findings.map(f => f.status))
-    };
-  }, [findings]);
+  const filterOptions = useMemo(() => buildFindingFilterOptions(findings, filters), [findings, filters]);
 
   // Filtered findings, renumbered sequentially (displayNo) for table and exports
-  const filteredFindings = useMemo(() => {
-    const search = filters.search.trim().toLowerCase();
-    return findings
-      .filter(f =>
-        (!filters.year || getFindingYear(f.date) === filters.year) &&
-        (!search || f.finding?.toLowerCase().includes(search)) &&
-        (!filters.category || f.category === filters.category) &&
-        (!filters.picShip || f.pic_ship === filters.picShip) &&
-        (!filters.picOffice || f.pic_office === filters.picOffice) &&
-        (!filters.status || f.status === filters.status)
-      )
-      .map((f, index) => ({ ...f, displayNo: index + 1 }));
-  }, [findings, filters]);
+  const filteredFindings = useMemo(() => findings
+    .filter(f => matchesFindingFilters(f, filters))
+    .map((f, index) => ({ ...f, displayNo: index + 1 })), [findings, filters]);
 
-  const isFilterActive = Object.values(filters).some(value => value.trim() !== '');
+  const isFilterActive = hasActiveFindingFilters(filters);
   const findingCountLabel = isFilterActive
     ? `${filteredFindings.length} dari ${findings.length}`
     : `${findings.length}`;
 
   const updateFilter = (key, value) => setFilters(prev => ({ ...prev, [key]: value }));
-  const resetFilters = () => setFilters(EMPTY_FILTERS);
+  const resetFilters = () => setFilters(EMPTY_FINDING_FILTERS);
 
   // Photo gallery modal state
   const [photoGallery, setPhotoGallery] = useState({
@@ -240,7 +223,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
   };
 
   useEffect(() => {
-    setFilters(EMPTY_FILTERS);
+    setFilters(EMPTY_FINDING_FILTERS);
     if (selectedShip?.id) {
       fetchShipData();
     }
@@ -1666,7 +1649,11 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
               <h6 className="mb-2" style={{ fontSize: '0.75rem', fontWeight: '500', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 User di-assign
               </h6>
-              <p className="mb-0" style={{ fontSize: '1.125rem', fontWeight: '600', color: '#0f172a' }}>
+              <p
+                className="mb-0"
+                title={assignedUser?.email || undefined}
+                style={{ fontSize: '1.125rem', fontWeight: '600', color: '#0f172a', overflowWrap: 'anywhere' }}
+              >
                 {loadingUser ? '...' : (assignedUser ? assignedUser.email : 'Belum di-assign')}
               </p>
             </div>
@@ -1695,14 +1682,14 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
           {!loading && findings.length > 0 && (
             <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid #f1f5f9' }}>
               <div className="row g-2 align-items-end">
-                <div className="col-6 col-md-2">
+                <div className="col-6 col-md-4 col-xxl-2">
                   <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>Tahun</label>
                   <select className="form-select form-select-sm" value={filters.year} onChange={(e) => updateFilter('year', e.target.value)}>
                     <option value="">Semua</option>
                     {filterOptions.years.map(year => <option key={year} value={year}>{year}</option>)}
                   </select>
                 </div>
-                <div className="col-6 col-md-3">
+                <div className="col-6 col-md-4 col-xxl-3">
                   <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>Finding</label>
                   <input
                     type="text"
@@ -1712,35 +1699,35 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                     onChange={(e) => updateFilter('search', e.target.value)}
                   />
                 </div>
-                <div className="col-6 col-md-2">
+                <div className="col-6 col-md-4 col-xxl-2">
                   <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>Category</label>
                   <select className="form-select form-select-sm" value={filters.category} onChange={(e) => updateFilter('category', e.target.value)}>
                     <option value="">Semua</option>
                     {filterOptions.categories.map(category => <option key={category} value={category}>{category}</option>)}
                   </select>
                 </div>
-                <div className="col-6 col-md-1">
+                <div className="col-6 col-md-3 col-xxl-1">
                   <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>PIC Kapal</label>
                   <select className="form-select form-select-sm" value={filters.picShip} onChange={(e) => updateFilter('picShip', e.target.value)}>
                     <option value="">Semua</option>
                     {filterOptions.picShips.map(pic => <option key={pic} value={pic}>{pic}</option>)}
                   </select>
                 </div>
-                <div className="col-6 col-md-1">
+                <div className="col-6 col-md-3 col-xxl-1">
                   <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>PIC Kantor</label>
                   <select className="form-select form-select-sm" value={filters.picOffice} onChange={(e) => updateFilter('picOffice', e.target.value)}>
                     <option value="">Semua</option>
                     {filterOptions.picOffices.map(pic => <option key={pic} value={pic}>{pic}</option>)}
                   </select>
                 </div>
-                <div className="col-6 col-md-1">
+                <div className="col-6 col-md-3 col-xxl-1">
                   <label className="form-label mb-1" style={FILTER_LABEL_STYLE}>Status</label>
                   <select className="form-select form-select-sm" value={filters.status} onChange={(e) => updateFilter('status', e.target.value)}>
                     <option value="">Semua</option>
                     {filterOptions.statuses.map(status => <option key={status} value={status}>{status}</option>)}
                   </select>
                 </div>
-                <div className="col-12 col-md-2">
+                <div className="col-12 col-md-3 col-xxl-2">
                   <button
                     type="button"
                     className="btn btn-sm btn-outline-secondary w-100"
@@ -1846,6 +1833,7 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                       fontWeight: '600',
                       color: '#1e40af',
                       borderBottom: 'none',
+                      ...STICKY_ACTION_CELL_STYLE,
                     }}>Action</th>}
                   </tr>
                 </thead>
@@ -1942,8 +1930,8 @@ const ShipDetails = ({ selectedShip, onBack, showAddForm, setShowAddForm, role =
                           />
                         </td>
                         {role === 'admin' && (
-                            <td className="text-center" style={{ padding: '1rem 0.75rem' }}>
-                              <div className="d-flex gap-1 justify-content-center">
+                            <td className="text-center" style={{ padding: '1rem 0.75rem', ...STICKY_ACTION_CELL_STYLE }}>
+                              <div className="d-flex flex-column gap-1 align-items-stretch">
                               <button 
                                   className="btn"
                                 onClick={() => handleEditFinding(finding)}
